@@ -31,6 +31,32 @@ class Position {
 
   double get notional => margin * leverage;
 
+  /// Ortalama maliyet: giriş fiyatı + açılış komisyonunun birime düşen payı
+  /// (short'ta başabaş fiyatı: komisyon kadar aşağıda).
+  double get avgCost => quantity == 0
+      ? entryPrice
+      : (side == Side.long
+          ? entryPrice + openCommission / quantity
+          : entryPrice - openCommission / quantity);
+
+  Position copyWith({
+    double? margin,
+    double? entryPrice,
+    double? quantity,
+    double? openCommission,
+  }) =>
+      Position(
+        id: id,
+        symbol: symbol,
+        side: side,
+        leverage: leverage,
+        margin: margin ?? this.margin,
+        entryPrice: entryPrice ?? this.entryPrice,
+        quantity: quantity ?? this.quantity,
+        openCommission: openCommission ?? this.openCommission,
+        openedAt: openedAt,
+      );
+
   double pnlAt(double price) => side == Side.long
       ? (price - entryPrice) * quantity
       : (entryPrice - price) * quantity;

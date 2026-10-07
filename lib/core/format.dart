@@ -19,4 +19,18 @@ String fmtPct(double v) {
   return '$sign$s%';
 }
 
+final NumberFormat _qty = NumberFormat('#,##0.######', 'tr_TR');
+
+/// Adet gösterimi (en fazla 6 ondalık).
+String fmtQty(double v) => _qty.format(v);
+
+/// Metin kutusuna yazılacak adet ('.' ondalık, sondaki sıfırlar atılır).
+String qtyInput(double v) {
+  var s = v.toStringAsFixed(6);
+  if (s.contains('.')) {
+    s = s.replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'[.]$'), '');
+  }
+  return s;
+}
+
 String fmtDate(DateTime d) => _dateFmt.format(d);

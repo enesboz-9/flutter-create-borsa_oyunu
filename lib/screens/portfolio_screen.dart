@@ -9,6 +9,7 @@ import '../core/format.dart';
 import '../models/position.dart';
 import '../state/game_controller.dart';
 import '../widgets/common.dart';
+import 'close_sheet.dart';
 
 const List<Color> _palette = [
   Color(0xFF7C6CFF),
@@ -292,8 +293,11 @@ class _PositionCard extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 10),
-                    KeyValueRow('Giriş', '₺${fmtPrice(p.entryPrice)}'),
+                    KeyValueRow('Adet', fmtQty(p.quantity)),
+                    KeyValueRow('Ort. maliyet (komisyon dahil)',
+                        '₺${fmtPrice(p.avgCost)}'),
                     KeyValueRow('Güncel', '₺${fmtPrice(price)}'),
+                    KeyValueRow('Değer', fmtTl(price * p.quantity)),
                     KeyValueRow('Teminat', fmtTl(p.margin)),
                     KeyValueRow(
                         'Likidasyon', '₺${fmtPrice(p.liquidationPrice)}'),
@@ -330,18 +334,9 @@ class _PositionCard extends StatelessWidget {
                               borderRadius: BorderRadius.circular(12)),
                         ),
                         icon: const Icon(Icons.close, size: 18),
-                        label: const Text('Pozisyonu kapat'),
-                        onPressed: () {
-                          // Ekranda gördüğün fiyattan kapat; basış anından
-                          // sonra gelen tik fiyatı sonucu değiştirmez.
-                          final err = context
-                              .read<GameController>()
-                              .closePosition(p.id, atPrice: price);
-                          if (err != null) {
-                            ScaffoldMessenger.of(context)
-                                .showSnackBar(SnackBar(content: Text(err)));
-                          }
-                        },
+                        label: Text(isLong ? 'Sat' : 'Kapat'),
+                        // Adet ya da yüzde girerek kısmen de satabilirsin.
+                        onPressed: () => showCloseSheet(context, p.id),
                       ),
                     ),
                   ],

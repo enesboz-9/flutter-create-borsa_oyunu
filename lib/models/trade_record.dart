@@ -16,6 +16,7 @@ class TradeRecord {
     required this.reason,
     required this.openedAt,
     required this.closedAt,
+    this.quantity = 0,
   });
 
   final String id;
@@ -35,6 +36,9 @@ class TradeRecord {
   final DateTime openedAt;
   final DateTime closedAt;
 
+  /// Kapatılan adet (eski kayıtlarda 0).
+  final double quantity;
+
   double get netPnl => grossPnl - commission;
 
   Map<String, dynamic> toJson() => {
@@ -50,6 +54,7 @@ class TradeRecord {
         'reason': reason.name,
         'openedAt': openedAt.toIso8601String(),
         'closedAt': closedAt.toIso8601String(),
+        'quantity': quantity,
       };
 
   factory TradeRecord.fromJson(Map<String, dynamic> j) => TradeRecord(
@@ -65,5 +70,6 @@ class TradeRecord {
         reason: CloseReason.values.byName(j['reason'] as String),
         openedAt: DateTime.parse(j['openedAt'] as String),
         closedAt: DateTime.parse(j['closedAt'] as String),
+        quantity: (j['quantity'] as num?)?.toDouble() ?? 0,
       );
 }

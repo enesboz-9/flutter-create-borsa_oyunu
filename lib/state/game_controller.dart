@@ -112,30 +112,59 @@ class GameController extends ChangeNotifier {
     final commission = commissionFor(asset, margin, leverage);
     if (margin + commission > _cash + 1e-9) return 'Yetersiz bakiye.';
 
-    final position = Position(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
-      symbol: asset.symbol,
-      side: side,
-      leverage: leverage,
-      margin: margin,
-      entryPrice: price,
-      quantity: margin * leverage / price,
-      openCommission: commission,
-      openedAt: DateTime.now(),
-    );
+    final newQty = margin * leverage / price;
+    // Aynı varlık + yön + kaldıraç varsa mevcut pozisyona eklenir ve
+    // ortalama maliyet güncellenir.
+    final idx = _positions.indexWhere((x) =>
+        x.symbol == asset.symbol && x.side == side && x.leverage == leverage);
+    final Position held;
+    if (idx >= 0) {
+      final e = _positions[idx];
+      final qty = e.quantity + newQty;
+      held = e.copyWith(
+        margin: e.margin + margin,
+        quantity: qty,
+        entryPrice: (e.entryPrice * e.quantity + price * newQty) / qty,
+        openCommission: e.openCommission + commission,
+      );
+      _positions[idx] = held;
+    } else {
+      held = Position(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        symbol: asset.symbol,
+        side: side,
+        leverage: leverage,
+        margin: margin,
+        entryPrice: price,
+        quantity: newQty,
+        openCommission: commission,
+        openedAt: DateTime.now(),
+      );
+      _positions.add(held);
+    }
     _cash -= margin + commission;
-    _positions.add(position);
     _events.add(
-        '${asset.symbol} ${side == Side.long ? 'LONG' : 'SHORT'} ${leverage}x açıldı. Komisyon: ${fmtTl(commission)}');
+        '${asset.symbol} ${side == Side.long ? 'LONG' : 'SHORT'} ${leverage}x: ${fmtQty(newQty)} adet ₺${fmtPrice(price)} fiyatından alındı. Komisyon: ${fmtTl(commission)} • Ort. maliyet: ₺${fmtPrice(held.avgCost)}');
     _persist();
     notifyListeners();
     return null;
   }
 
+  Position? positionById(String id) {
+    for (final p in _positions) {
+      if (p.id == id) return p;
+    }
+    return null;
+  }
+
   /// [atPrice]: kullanıcının butona bastığı anda ekranda gördüğü fiyat.
-  /// Verilirse pozisyon tam bu fiyattan kapanır; arada gelen fiyat
-  /// güncellemeleri sonucu etkilemez. Verilmezse güncel fiyat kullanılır.
-  String? closePosition(String id, {double? atPrice}) {
+  /// Verilirse işlem tam bu fiyattan yapılır; arada gelen fiyat güncellemeleri
+  /// sonucu etkilemez. Verilmezse güncel fiyat kullanılır.
+  ///
+  /// [quantity]: kapatılacak adet. Verilmezse pozisyonun tamamı kapanır.
+  /// Kısmi kapatmada teminat, açılış komisyonu ve adet orantılı düşer;
+  /// kalan pozisyonun ortalama maliyeti değişmez.
+  String? closePosition(String id, {double? atPrice, double? quantity}) {
     final idx = _positions.indexWhere((p) => p.id == id);
     if (idx < 0) return 'Pozisyon bulunamadı.';
     final p = _positions[idx];
@@ -145,28 +174,52 @@ class GameController extends ChangeNotifier {
     }
     final price =
         (atPrice != null && atPrice > 0) ? atPrice : priceOf(p.symbol);
-    final gross = p.pnlAt(price);
-    final closeCommission = price * p.quantity * asset.category.commissionRate;
+    if (price <= 0) return 'Fiyat alınamadı.';
 
-    _cash += max(0.0, p.margin + gross - closeCommission);
-    _positions.removeAt(idx);
+    var qty = quantity ?? p.quantity;
+    if (qty <= 0) return 'Satılacak adedi girin.';
+    if (qty > p.quantity * (1 + 1e-9)) {
+      return 'Elindeki adetten fazlasını satamazsın (${fmtQty(p.quantity)}).';
+    }
+    final full = qty >= p.quantity * (1 - 1e-9);
+    if (full) qty = p.quantity;
+
+    final f = qty / p.quantity;
+    final marginPart = p.margin * f;
+    final openCommPart = p.openCommission * f;
+    final gross = p.side == Side.long
+        ? (price - p.entryPrice) * qty
+        : (p.entryPrice - price) * qty;
+    final closeCommission = price * qty * asset.category.commissionRate;
+
+    _cash += max(0.0, marginPart + gross - closeCommission);
+    if (full) {
+      _positions.removeAt(idx);
+    } else {
+      _positions[idx] = p.copyWith(
+        margin: p.margin - marginPart,
+        quantity: p.quantity - qty,
+        openCommission: p.openCommission - openCommPart,
+      );
+    }
     final record = TradeRecord(
-      id: p.id,
+      id: full ? p.id : '${p.id}-${DateTime.now().microsecondsSinceEpoch}',
       symbol: p.symbol,
       side: p.side,
       leverage: p.leverage,
-      margin: p.margin,
+      margin: marginPart,
       entryPrice: p.entryPrice,
       exitPrice: price,
       grossPnl: gross,
-      commission: p.openCommission + closeCommission,
+      commission: openCommPart + closeCommission,
       reason: CloseReason.manual,
       openedAt: p.openedAt,
       closedAt: DateTime.now(),
+      quantity: qty,
     );
     _history.insert(0, record);
     _events.add(
-        '${p.symbol} ₺${fmtPrice(price)} fiyatından kapatıldı. Net: ${fmtSigned(record.netPnl)}');
+        '${p.symbol} ${fmtQty(qty)} adet ₺${fmtPrice(price)} fiyatından ${full ? 'kapatıldı' : 'satıldı'}. Net: ${fmtSigned(record.netPnl)}');
     _persist();
     notifyListeners();
     return null;
@@ -289,6 +342,7 @@ class GameController extends ChangeNotifier {
         reason: CloseReason.liquidation,
         openedAt: p.openedAt,
         closedAt: DateTime.now(),
+        quantity: p.quantity,
       ),
     );
     _events.add('${p.symbol} pozisyonu likide edildi, teminat kaybedildi.');

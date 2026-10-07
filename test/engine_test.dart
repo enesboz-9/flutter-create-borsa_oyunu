@@ -167,4 +167,74 @@ void main() {
     expect(g.addAlert(asset: btc, targetPrice: 100), isNotNull); // güncel fiyat
     expect(g.alerts, isEmpty);
   });
+  test('aynı varlığa ikinci alım ortalama maliyeti günceller', () async {
+    final prices = FakePrices();
+    final g = GameController(prices, MemRepo());
+    await g.init();
+    final btc = kAssets.firstWhere((a) => a.symbol == 'BTC');
+
+    // 100 TL'den 1000 adet, sonra 200 TL'den 500 adet (kaldıraç 1x).
+    g.openPosition(asset: btc, side: Side.long, margin: 100000, leverage: 1);
+    prices.price = 200;
+    g.openPosition(asset: btc, side: Side.long, margin: 100000, leverage: 1);
+
+    expect(g.positions.length, 1);
+    final p = g.positions.first;
+    expect(p.quantity, closeTo(1500, 1e-9));
+    expect(p.entryPrice, closeTo(200000 / 1500, 1e-9));
+    // Komisyon (%0,1): 100 + 100 = 200 TL, birim başına 200/1500 eklenir.
+    expect(p.openCommission, closeTo(200, 1e-9));
+    expect(p.avgCost, closeTo(200000 / 1500 + 200 / 1500, 1e-9));
+  });
+
+  test('farklı kaldıraç ayrı pozisyon olur', () async {
+    final g = GameController(FakePrices(), MemRepo());
+    await g.init();
+    final btc = kAssets.firstWhere((a) => a.symbol == 'BTC');
+    g.openPosition(asset: btc, side: Side.long, margin: 10000, leverage: 2);
+    g.openPosition(asset: btc, side: Side.long, margin: 10000, leverage: 5);
+    expect(g.positions.length, 2);
+  });
+
+  test('kısmi satış orantılı kapatır, kalanın maliyeti değişmez', () async {
+    final prices = FakePrices();
+    final g = GameController(prices, MemRepo());
+    await g.init();
+    final btc = kAssets.firstWhere((a) => a.symbol == 'BTC');
+
+    g.openPosition(asset: btc, side: Side.long, margin: 100000, leverage: 1);
+    final before = g.positions.first; // 1000 adet @100, komisyon 100
+    prices.price = 110;
+    final err = g.closePosition(before.id, quantity: 400);
+    expect(err, isNull);
+
+    final p = g.positions.single;
+    expect(p.quantity, closeTo(600, 1e-9));
+    expect(p.margin, closeTo(60000, 1e-6));
+    expect(p.openCommission, closeTo(60, 1e-9));
+    expect(p.entryPrice, closeTo(100, 1e-9));
+
+    final r = g.history.first;
+    expect(r.quantity, closeTo(400, 1e-9));
+    expect(r.grossPnl, closeTo(4000, 1e-6));
+    // Komisyon: açılıştan 40 + satıştan 110*400*0,001 = 44
+    expect(r.commission, closeTo(84, 1e-6));
+    // Nakit: 1.000.000 - 100.100 + (40.000 + 4.000 - 44)
+    expect(g.cash, closeTo(1000000 - 100100 + 43956, 1e-6));
+  });
+
+  test('fazla adet satılamaz, tamamı girilirse pozisyon kapanır', () async {
+    final g = GameController(FakePrices(), MemRepo());
+    await g.init();
+    final btc = kAssets.firstWhere((a) => a.symbol == 'BTC');
+    g.openPosition(asset: btc, side: Side.long, margin: 100000, leverage: 1);
+    final id = g.positions.first.id;
+
+    expect(g.closePosition(id, quantity: 1001), isNotNull);
+    expect(g.closePosition(id, quantity: 0), isNotNull);
+    expect(g.positions.length, 1);
+
+    expect(g.closePosition(id, quantity: 1000), isNull);
+    expect(g.positions, isEmpty);
+  });
 }

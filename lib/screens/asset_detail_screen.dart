@@ -169,7 +169,7 @@ class AssetDetailScreen extends StatelessWidget {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          '${p.side == Side.long ? 'LONG' : 'SHORT'} ${p.leverage}x  •  ₺${fmtPrice(p.entryPrice)}',
+                          '${p.side == Side.long ? 'LONG' : 'SHORT'} ${p.leverage}x  •  ${fmtQty(p.quantity)} adet  •  Ort. ₺${fmtPrice(p.avgCost)}',
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                       ),

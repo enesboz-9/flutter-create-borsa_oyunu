@@ -165,6 +165,7 @@ class _RecordCard extends StatelessWidget {
           const SizedBox(height: 10),
           const Divider(color: Colors.white10, height: 1),
           const SizedBox(height: 6),
+          if (r.quantity > 0) KeyValueRow('Adet', fmtQty(r.quantity)),
           KeyValueRow('Giriş → Çıkış',
               '₺${fmtPrice(r.entryPrice)} → ₺${fmtPrice(r.exitPrice)}'),
           KeyValueRow('Teminat', fmtTl(r.margin)),
