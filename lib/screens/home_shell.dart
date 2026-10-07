@@ -60,9 +60,10 @@ class _HomeShellState extends State<HomeShell> {
     messenger.showSnackBar(
       SnackBar(
         duration: const Duration(seconds: 10),
-        content: Text(
-            'Alarm: ${a.symbol} ₺${fmtPrice(a.targetPrice)} hedefine ulaştı (şu an ₺${fmtPrice(reached)}).'),
-        action: (asset == null || side == null)
+        content: Text(a.auto
+            ? 'Otomatik emir • ${a.symbol} ₺${fmtPrice(a.targetPrice)}: ${a.note ?? ''}'
+            : 'Alarm: ${a.symbol} ₺${fmtPrice(a.targetPrice)} hedefine ulaştı (şu an ₺${fmtPrice(reached)}).'),
+        action: (a.auto || asset == null || side == null)
             ? null
             : SnackBarAction(
                 label: side == Side.long ? 'AL' : 'SAT',

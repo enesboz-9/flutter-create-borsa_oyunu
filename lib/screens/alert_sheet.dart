@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../core/constants.dart';
 import '../core/format.dart';
 import '../models/asset.dart';
+import '../models/position.dart';
 import '../models/price_alert.dart';
 import '../state/game_controller.dart';
 import '../widgets/alert_tile.dart';
@@ -26,7 +27,9 @@ void showAlertSheet(BuildContext context, Asset asset) {
   );
 }
 
-/// Bir varlık için fiyat alarmı kurma ve o varlığın alarmlarını yönetme.
+enum _Mode { notify, buy, sell }
+
+/// Bir varlık için fiyat alarmı / otomatik emir kurma ve yönetme.
 class AlertSheet extends StatefulWidget {
   const AlertSheet({super.key, required this.asset});
 
@@ -37,37 +40,80 @@ class AlertSheet extends StatefulWidget {
 }
 
 class _AlertSheetState extends State<AlertSheet> {
-  final _ctrl = TextEditingController();
-  AlertIntent _intent = AlertIntent.none;
+  final _targetCtrl = TextEditingController();
+  final _marginCtrl = TextEditingController();
+  final _qtyCtrl = TextEditingController();
+
+  _Mode _mode = _Mode.notify;
+  int _leverage = 1;
+  bool _sellByPercent = true;
+  int _sellPercent = 100;
   String? _error;
 
-  double get _target => double.tryParse(_ctrl.text.replaceAll(',', '.')) ?? 0;
+  static double _num(TextEditingController c) =>
+      double.tryParse(c.text.replaceAll(',', '.')) ?? 0;
+
+  double get _target => _num(_targetCtrl);
 
   @override
   void dispose() {
-    _ctrl.dispose();
+    _targetCtrl.dispose();
+    _marginCtrl.dispose();
+    _qtyCtrl.dispose();
     super.dispose();
   }
 
   void _setPct(double price, double pct) {
     final v = price * (1 + pct / 100);
     setState(() {
-      _ctrl.text = v.toStringAsFixed(v >= 10 ? 2 : 4);
+      _targetCtrl.text = v.toStringAsFixed(v >= 10 ? 2 : 4);
+      _error = null;
+    });
+  }
+
+  void _setMarginPct(GameController g, int pct) {
+    final rate = widget.asset.category.commissionRate;
+    final maxMargin = g.cash / (1 + _leverage * rate);
+    final v = (maxMargin * pct / 100 * 100).floorToDouble() / 100;
+    setState(() {
+      _marginCtrl.text = v.toStringAsFixed(2);
       _error = null;
     });
   }
 
   void _submit() {
-    final err = context.read<GameController>().addAlert(
+    final g = context.read<GameController>();
+    final String? err;
+    switch (_mode) {
+      case _Mode.notify:
+        err = g.addAlert(asset: widget.asset, targetPrice: _target);
+      case _Mode.buy:
+        err = g.addAlert(
           asset: widget.asset,
           targetPrice: _target,
-          intent: _intent,
+          intent: AlertIntent.buy,
+          auto: true,
+          orderMargin: _num(_marginCtrl),
+          orderLeverage: _leverage,
         );
+      case _Mode.sell:
+        err = g.addAlert(
+          asset: widget.asset,
+          targetPrice: _target,
+          intent: AlertIntent.sell,
+          auto: true,
+          orderPercent: _sellByPercent ? _sellPercent.toDouble() : null,
+          orderQuantity: _sellByPercent ? null : _num(_qtyCtrl),
+        );
+    }
     setState(() {
       _error = err;
       if (err == null) {
-        _ctrl.clear();
-        _intent = AlertIntent.none;
+        _targetCtrl.clear();
+        _marginCtrl.clear();
+        _qtyCtrl.clear();
+        _mode = _Mode.notify;
+        _leverage = 1;
       }
     });
   }
@@ -79,7 +125,180 @@ class _AlertSheetState extends State<AlertSheet> {
     }
     final pct = (t - price) / price * 100;
     final dir = t > price ? 'yukarı çıkınca' : 'aşağı inince';
-    return 'Fiyat ₺${fmtPrice(t)} seviyesine $dir haber verilir (${fmtPct(pct)}).';
+    return 'Fiyat ₺${fmtPrice(t)} seviyesine $dir tetiklenir (${fmtPct(pct)}).';
+  }
+
+  InputDecoration _dec(String label, {String? prefix}) => InputDecoration(
+        labelText: label,
+        prefixText: prefix,
+        filled: true,
+        fillColor: Colors.white10,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide.none,
+        ),
+      );
+
+  static final _numFormatter =
+      FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]'));
+
+  Widget _buyConfig(GameController g) {
+    final asset = widget.asset;
+    final maxLev = asset.category.maxLeverage;
+    final quick =
+        const [1, 2, 5, 10, 25, 50, 100].where((l) => l <= maxLev).toList();
+    final margin = _num(_marginCtrl);
+    final t = _target;
+    final qty = t > 0 ? margin * _leverage / t : 0.0;
+    final comm = g.commissionFor(asset, margin, _leverage);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 12),
+        TextField(
+          controller: _marginCtrl,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: [_numFormatter],
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          decoration: _dec('Alınacak teminat', prefix: '₺ '),
+          onChanged: (_) => setState(() => _error = null),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            for (final pct in const [10, 25, 50, 100]) ...[
+              Expanded(
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.white24),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () => _setMarginPct(g, pct),
+                  child: Text('%$pct'),
+                ),
+              ),
+              if (pct != 100) const SizedBox(width: 8),
+            ],
+          ],
+        ),
+        const SizedBox(height: 4),
+        const Text('Yüzdeler şu anki nakdine göre hesaplanır.',
+            style: TextStyle(color: kMuted, fontSize: 11)),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            const Text('Kaldıraç',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  for (final l in quick)
+                    ChoiceChip(
+                      label: Text('${l}x'),
+                      selected: _leverage == l,
+                      showCheckmark: false,
+                      onSelected: (_) => setState(() => _leverage = l),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        if (margin > 0 && t > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              'Tetiklenince ≈ ${fmtQty(qty)} adet alınır • komisyon ${fmtTl(comm)}',
+              style: const TextStyle(color: kMuted, fontSize: 12),
+            ),
+          ),
+        const Padding(
+          padding: EdgeInsets.only(top: 6),
+          child: Text(
+            'Tetiklenme anında nakdin yetersizse emir gerçekleşmez.',
+            style: TextStyle(color: kMuted, fontSize: 12),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _sellConfig(GameController g) {
+    final held = g.positions
+        .where((p) => p.symbol == widget.asset.symbol && p.side == Side.long)
+        .fold<double>(0, (s, p) => s + p.quantity);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            ChoiceChip(
+              label: const Text('Yüzde'),
+              selected: _sellByPercent,
+              showCheckmark: false,
+              onSelected: (_) => setState(() => _sellByPercent = true),
+            ),
+            const SizedBox(width: 8),
+            ChoiceChip(
+              label: const Text('Adet'),
+              selected: !_sellByPercent,
+              showCheckmark: false,
+              onSelected: (_) => setState(() => _sellByPercent = false),
+            ),
+            const Spacer(),
+            Text('Elindeki: ${fmtQty(held)} adet',
+                style: const TextStyle(color: kMuted, fontSize: 12)),
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (_sellByPercent)
+          Row(
+            children: [
+              for (final pct in const [25, 50, 75, 100]) ...[
+                Expanded(
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(
+                          color: _sellPercent == pct ? kRed : Colors.white24),
+                      backgroundColor: _sellPercent == pct
+                          ? kRed.withOpacity(0.15)
+                          : null,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () => setState(() => _sellPercent = pct),
+                    child: Text('%$pct'),
+                  ),
+                ),
+                if (pct != 100) const SizedBox(width: 8),
+              ],
+            ],
+          )
+        else
+          TextField(
+            controller: _qtyCtrl,
+            keyboardType:
+                const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [_numFormatter],
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            decoration: _dec('Satılacak adet'),
+            onChanged: (_) => setState(() => _error = null),
+          ),
+        const Padding(
+          padding: EdgeInsets.only(top: 8),
+          child: Text(
+            'Tetiklenince eldeki long pozisyonlardan satılır. Satılacak pozisyon yoksa emir gerçekleşmez.',
+            style: TextStyle(color: kMuted, fontSize: 12),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -88,6 +307,11 @@ class _AlertSheetState extends State<AlertSheet> {
     final asset = widget.asset;
     final price = g.priceOf(asset.symbol);
     final mine = g.alertsFor(asset.symbol);
+    final label = switch (_mode) {
+      _Mode.notify => 'Alarm kur',
+      _Mode.buy => 'Otomatik AL emri kur',
+      _Mode.sell => 'Otomatik SAT emri kur',
+    };
 
     return SafeArea(
       child: SingleChildScrollView(
@@ -113,7 +337,7 @@ class _AlertSheetState extends State<AlertSheet> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Fiyat alarmı • ${asset.symbol}',
+                      Text('Alarm ve emir • ${asset.symbol}',
                           style: const TextStyle(
                               fontSize: 18, fontWeight: FontWeight.w800)),
                       Text('Güncel fiyat: ₺${fmtPrice(price)}',
@@ -125,24 +349,37 @@ class _AlertSheetState extends State<AlertSheet> {
               ],
             ),
             const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              children: [
+                ChoiceChip(
+                  label: const Text('Sadece haber ver'),
+                  selected: _mode == _Mode.notify,
+                  showCheckmark: false,
+                  onSelected: (_) => setState(() => _mode = _Mode.notify),
+                ),
+                ChoiceChip(
+                  label: const Text('Otomatik AL'),
+                  selected: _mode == _Mode.buy,
+                  showCheckmark: false,
+                  onSelected: (_) => setState(() => _mode = _Mode.buy),
+                ),
+                ChoiceChip(
+                  label: const Text('Otomatik SAT'),
+                  selected: _mode == _Mode.sell,
+                  showCheckmark: false,
+                  onSelected: (_) => setState(() => _mode = _Mode.sell),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
             TextField(
-              controller: _ctrl,
+              controller: _targetCtrl,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
-              ],
+              inputFormatters: [_numFormatter],
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-              decoration: InputDecoration(
-                labelText: 'Hedef fiyat',
-                prefixText: '₺ ',
-                filled: true,
-                fillColor: Colors.white10,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide.none,
-                ),
-              ),
+              decoration: _dec('Hedef fiyat', prefix: '₺ '),
               onChanged: (_) => setState(() => _error = null),
             ),
             const SizedBox(height: 6),
@@ -161,30 +398,8 @@ class _AlertSheetState extends State<AlertSheet> {
                   ),
               ],
             ),
-            const SizedBox(height: 14),
-            const Text('Tetiklenince ne yapmak istiyorsun?',
-                style: TextStyle(fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: [
-                for (final i in AlertIntent.values)
-                  ChoiceChip(
-                    label: Text(i.label),
-                    selected: _intent == i,
-                    showCheckmark: false,
-                    onSelected: (_) => setState(() => _intent = i),
-                  ),
-              ],
-            ),
-            if (_intent != AlertIntent.none)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  'Alarm çalınca tek dokunuşla ${_intent == AlertIntent.buy ? 'AL' : 'SAT'} ekranı açılır. İşlem otomatik açılmaz.',
-                  style: const TextStyle(color: kMuted, fontSize: 12),
-                ),
-              ),
+            if (_mode == _Mode.buy) _buyConfig(g),
+            if (_mode == _Mode.sell) _sellConfig(g),
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 10),
@@ -194,14 +409,20 @@ class _AlertSheetState extends State<AlertSheet> {
               ),
             const SizedBox(height: 16),
             GradientButton(
-              label: 'Alarm kur',
-              icon: Icons.add_alert_outlined,
-              gradient: _kAlertGradient,
+              label: label,
+              icon: _mode == _Mode.notify
+                  ? Icons.add_alert_outlined
+                  : Icons.bolt,
+              gradient: switch (_mode) {
+                _Mode.notify => _kAlertGradient,
+                _Mode.buy => kBuyGradient,
+                _Mode.sell => kSellGradient,
+              },
               onPressed: _submit,
             ),
             if (mine.isNotEmpty) ...[
               const SizedBox(height: 20),
-              Text('${asset.symbol} alarmların (${mine.length})',
+              Text('${asset.symbol} alarm ve emirlerin (${mine.length})',
                   style: const TextStyle(
                       fontSize: 15, fontWeight: FontWeight.w800)),
               const SizedBox(height: 8),

@@ -1,10 +1,15 @@
+import '../core/format.dart';
 import 'position.dart';
 
 /// Alarmın hangi yöne tetikleneceği (kurulduğu andaki fiyata göre belirlenir).
 enum AlertDirection { above, below }
 
-/// Alarm tetiklenince ne yapmak istediğin. Sadece bir hatırlatmadır;
-/// işlem otomatik açılmaz, tek dokunuşla işlem ekranı açılır.
+/// Alarmın türü.
+/// - none: sadece bildirim.
+/// - buy / sell + [PriceAlert.auto] = true: tetiklenince otomatik emir
+///   (buy: long pozisyon aç, sell: eldeki long pozisyonu sat).
+/// - buy / sell + auto = false: eski tip hatırlatma (bildirimdeki butonla
+///   işlem sayfası açılır).
 enum AlertIntent { none, buy, sell }
 
 extension AlertIntentX on AlertIntent {
@@ -14,7 +19,7 @@ extension AlertIntentX on AlertIntent {
         AlertIntent.sell => 'Sat',
       };
 
-  /// Alarmdan açılacak işlem yönü (haber ver ise null).
+  /// Hatırlatma bildiriminden açılacak işlem yönü (haber ver ise null).
   Side? get side => switch (this) {
         AlertIntent.none => null,
         AlertIntent.buy => Side.long,
@@ -32,6 +37,12 @@ class PriceAlert {
     required this.createdAt,
     this.triggeredAt,
     this.triggeredPrice,
+    this.auto = false,
+    this.orderMargin,
+    this.orderLeverage = 1,
+    this.orderQuantity,
+    this.orderPercent,
+    this.note,
   });
 
   final String id;
@@ -43,22 +54,64 @@ class PriceAlert {
   final DateTime? triggeredAt;
   final double? triggeredPrice;
 
+  /// true ise tetiklenince emir otomatik çalışır.
+  final bool auto;
+
+  /// Otomatik AL: harcanacak teminat (TL) ve kaldıraç.
+  final double? orderMargin;
+  final int orderLeverage;
+
+  /// Otomatik SAT: ya sabit adet ya da eldekinin yüzdesi.
+  final double? orderQuantity;
+  final double? orderPercent;
+
+  /// Tetiklenince emrin sonucu (gerçekleşti / neden olmadı).
+  final String? note;
+
   bool get isActive => triggeredAt == null;
 
   bool isHitBy(double price) => direction == AlertDirection.above
       ? price >= targetPrice
       : price <= targetPrice;
 
-  PriceAlert triggered(double price, DateTime at) => PriceAlert(
+  /// Kısa emir özeti (alarm satırında gösterilir).
+  String get orderSummary {
+    if (!auto) return '';
+    if (intent == AlertIntent.buy) {
+      return '₺${fmtPrice(orderMargin ?? 0)} teminatla al • ${orderLeverage}x';
+    }
+    if (orderPercent != null) {
+      return 'Eldekinin %${orderPercent!.toStringAsFixed(0)}\'ini sat';
+    }
+    return '${fmtQty(orderQuantity ?? 0)} adet sat';
+  }
+
+  PriceAlert _copy({
+    DateTime? triggeredAt,
+    double? triggeredPrice,
+    String? note,
+  }) =>
+      PriceAlert(
         id: id,
         symbol: symbol,
         targetPrice: targetPrice,
         direction: direction,
         intent: intent,
         createdAt: createdAt,
-        triggeredAt: at,
-        triggeredPrice: price,
+        triggeredAt: triggeredAt ?? this.triggeredAt,
+        triggeredPrice: triggeredPrice ?? this.triggeredPrice,
+        auto: auto,
+        orderMargin: orderMargin,
+        orderLeverage: orderLeverage,
+        orderQuantity: orderQuantity,
+        orderPercent: orderPercent,
+        note: note ?? this.note,
       );
+
+  PriceAlert triggered(double price, DateTime at) =>
+      _copy(triggeredAt: at, triggeredPrice: price);
+
+  PriceAlert withNote(String n) => _copy(note: n);
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -69,6 +122,12 @@ class PriceAlert {
         'createdAt': createdAt.toIso8601String(),
         'triggeredAt': triggeredAt?.toIso8601String(),
         'triggeredPrice': triggeredPrice,
+        'auto': auto,
+        'orderMargin': orderMargin,
+        'orderLeverage': orderLeverage,
+        'orderQuantity': orderQuantity,
+        'orderPercent': orderPercent,
+        'note': note,
       };
 
   factory PriceAlert.fromJson(Map<String, dynamic> j) => PriceAlert(
@@ -82,5 +141,11 @@ class PriceAlert {
             ? null
             : DateTime.parse(j['triggeredAt'] as String),
         triggeredPrice: (j['triggeredPrice'] as num?)?.toDouble(),
+        auto: (j['auto'] as bool?) ?? false,
+        orderMargin: (j['orderMargin'] as num?)?.toDouble(),
+        orderLeverage: (j['orderLeverage'] as num?)?.toInt() ?? 1,
+        orderQuantity: (j['orderQuantity'] as num?)?.toDouble(),
+        orderPercent: (j['orderPercent'] as num?)?.toDouble(),
+        note: j['note'] as String?,
       );
 }

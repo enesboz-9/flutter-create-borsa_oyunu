@@ -28,16 +28,18 @@ class AlertTile extends StatelessWidget {
     final active = alert.isActive;
     final color = active ? (up ? kGreen : kRed) : kMuted;
 
+    final isBuy = alert.intent == AlertIntent.buy;
     final String subtitle;
     if (active) {
       final dist = currentPrice > 0
           ? (alert.targetPrice - currentPrice) / currentPrice * 100
           : 0.0;
       final distText = dist.abs().toStringAsFixed(2).replaceAll('.', ',');
-      subtitle = '${up ? 'Yukarı' : 'Aşağı'} yönlü • şu an %$distText uzakta';
+      subtitle =
+          '${alert.auto ? '${alert.orderSummary} • ' : ''}${up ? 'Yukarı' : 'Aşağı'} yönlü • şu an %$distText uzakta';
     } else {
       subtitle =
-          'Tetiklendi • ${fmtDate(alert.triggeredAt!)} • ₺${fmtPrice(alert.triggeredPrice ?? alert.targetPrice)}';
+          '${alert.note != null ? '${alert.note}\n' : ''}Tetiklendi • ${fmtDate(alert.triggeredAt!)} • ₺${fmtPrice(alert.triggeredPrice ?? alert.targetPrice)}';
     }
 
     return AppCard(
@@ -87,22 +89,18 @@ class AlertTile extends StatelessWidget {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 7, vertical: 2),
                         decoration: BoxDecoration(
-                          color: (alert.intent == AlertIntent.buy
-                                  ? kGreen
-                                  : kRed)
+                          color: (isBuy ? kGreen : kRed)
                               .withOpacity(active ? 0.2 : 0.08),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
-                          alert.intent.label.toUpperCase(),
+                          alert.auto
+                              ? 'OTO ${alert.intent.label.toUpperCase()}'
+                              : alert.intent.label.toUpperCase(),
                           style: TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.w800,
-                            color: active
-                                ? (alert.intent == AlertIntent.buy
-                                    ? kGreen
-                                    : kRed)
-                                : kMuted,
+                            color: active ? (isBuy ? kGreen : kRed) : kMuted,
                           ),
                         ),
                       ),

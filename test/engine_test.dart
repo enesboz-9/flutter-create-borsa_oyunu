@@ -237,4 +237,123 @@ void main() {
     expect(g.closePosition(id, quantity: 1000), isNull);
     expect(g.positions, isEmpty);
   });
+  test('otomatik AL emri hedefte tetik fiyatından long açar', () async {
+    final prices = FakePrices();
+    final g = GameController(prices, MemRepo());
+    await g.init();
+    final btc = kAssets.firstWhere((a) => a.symbol == 'BTC');
+
+    expect(
+        g.addAlert(
+          asset: btc,
+          targetPrice: 90,
+          intent: AlertIntent.buy,
+          auto: true,
+          orderMargin: 50000,
+          orderLeverage: 2,
+        ),
+        isNull);
+
+    prices.tick(95);
+    expect(g.positions, isEmpty);
+
+    prices.tick(89);
+    expect(g.positions.length, 1);
+    final p = g.positions.first;
+    expect(p.side, Side.long);
+    expect(p.leverage, 2);
+    expect(p.entryPrice, closeTo(89, 1e-9));
+    expect(p.quantity, closeTo(100000 / 89, 1e-9));
+    expect(g.alerts.first.isActive, isFalse);
+    expect(g.alerts.first.note, startsWith('Alındı'));
+
+    // Tekrar tetiklenmez.
+    prices.tick(80);
+    expect(g.positions.length, 1);
+  });
+
+  test('otomatik SAT emri yüzde ile kısmen satar', () async {
+    final prices = FakePrices();
+    final g = GameController(prices, MemRepo());
+    await g.init();
+    final btc = kAssets.firstWhere((a) => a.symbol == 'BTC');
+
+    g.openPosition(asset: btc, side: Side.long, margin: 100000, leverage: 1);
+    g.addAlert(
+      asset: btc,
+      targetPrice: 120,
+      intent: AlertIntent.sell,
+      auto: true,
+      orderPercent: 40,
+    );
+
+    prices.tick(121);
+    expect(g.positions.single.quantity, closeTo(600, 1e-9));
+    expect(g.history.first.exitPrice, 121);
+    expect(g.history.first.quantity, closeTo(400, 1e-9));
+  });
+
+  test('otomatik SAT emri adet ile satar, pozisyon yoksa başarısız olur',
+      () async {
+    final prices = FakePrices();
+    final g = GameController(prices, MemRepo());
+    await g.init();
+    final btc = kAssets.firstWhere((a) => a.symbol == 'BTC');
+
+    g.addAlert(
+      asset: btc,
+      targetPrice: 110,
+      intent: AlertIntent.sell,
+      auto: true,
+      orderQuantity: 300,
+    );
+    prices.tick(111);
+    expect(g.alerts.first.note, startsWith('Emir gerçekleşmedi'));
+
+    prices.tick(100);
+    g.openPosition(asset: btc, side: Side.long, margin: 100000, leverage: 1);
+    g.addAlert(
+      asset: btc,
+      targetPrice: 120,
+      intent: AlertIntent.sell,
+      auto: true,
+      orderQuantity: 300,
+    );
+    prices.tick(121);
+    expect(g.positions.single.quantity, closeTo(700, 1e-9));
+  });
+
+  test('yetersiz nakitte otomatik AL gerçekleşmez, geçersiz emir kurulmaz',
+      () async {
+    final prices = FakePrices();
+    final g = GameController(prices, MemRepo());
+    await g.init();
+    final btc = kAssets.firstWhere((a) => a.symbol == 'BTC');
+
+    expect(
+        g.addAlert(
+            asset: btc,
+            targetPrice: 90,
+            intent: AlertIntent.buy,
+            auto: true,
+            orderMargin: 0),
+        isNotNull);
+    expect(
+        g.addAlert(
+            asset: btc,
+            targetPrice: 90,
+            intent: AlertIntent.sell,
+            auto: true),
+        isNotNull);
+
+    g.addAlert(
+        asset: btc,
+        targetPrice: 90,
+        intent: AlertIntent.buy,
+        auto: true,
+        orderMargin: 5000000);
+    prices.tick(89);
+    expect(g.positions, isEmpty);
+    expect(g.alerts.first.note, startsWith('Emir gerçekleşmedi'));
+  });
 }

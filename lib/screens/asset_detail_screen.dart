@@ -42,7 +42,7 @@ class AssetDetailScreen extends StatelessWidget {
         title: Text(asset.symbol, style: const TextStyle(fontSize: 20)),
         actions: [
           IconButton(
-            tooltip: 'Fiyat alarmı',
+            tooltip: 'Fiyat alarmı ve otomatik emir',
             onPressed: () => showAlertSheet(context, asset),
             icon: Badge(
               isLabelVisible: alertCount > 0,

@@ -243,12 +243,39 @@ class GameController extends ChangeNotifier {
 
   /// Başarılıysa null, değilse hata mesajı döner.
   /// Yön (yukarı/aşağı) hedef fiyatın güncel fiyata göre konumundan belirlenir.
+  ///
+  /// [auto] true ise alarm tetiklenince emir kendiliğinden çalışır:
+  /// - [intent] buy: [orderMargin] teminat ve [orderLeverage] ile long açar.
+  /// - [intent] sell: eldeki long pozisyonlardan [orderPercent] yüzde ya da
+  ///   [orderQuantity] adet satar.
   String? addAlert({
     required Asset asset,
     required double targetPrice,
     AlertIntent intent = AlertIntent.none,
+    bool auto = false,
+    double? orderMargin,
+    int orderLeverage = 1,
+    double? orderQuantity,
+    double? orderPercent,
   }) {
     if (targetPrice <= 0) return 'Hedef fiyatı girin.';
+    if (auto) {
+      if (intent == AlertIntent.buy) {
+        if (orderMargin == null || orderMargin <= 0) {
+          return 'Alınacak teminat tutarını girin.';
+        }
+        if (orderLeverage < 1 || orderLeverage > asset.category.maxLeverage) {
+          return 'Kaldıraç 1x ile ${asset.category.maxLeverage}x arasında olmalı.';
+        }
+      } else if (intent == AlertIntent.sell) {
+        final hasPct =
+            orderPercent != null && orderPercent > 0 && orderPercent <= 100;
+        final hasQty = orderQuantity != null && orderQuantity > 0;
+        if (!hasPct && !hasQty) return 'Satılacak adedi ya da yüzdeyi girin.';
+      } else {
+        return 'Otomatik emir için Al ya da Sat seçin.';
+      }
+    }
     final price = priceOf(asset.symbol);
     if (price <= 0) return 'Fiyat alınamadı.';
     if ((targetPrice - price).abs() / price < 1e-6) {
@@ -268,6 +295,13 @@ class GameController extends ChangeNotifier {
             targetPrice > price ? AlertDirection.above : AlertDirection.below,
         intent: intent,
         createdAt: DateTime.now(),
+        auto: auto,
+        orderMargin: auto && intent == AlertIntent.buy ? orderMargin : null,
+        orderLeverage: auto && intent == AlertIntent.buy ? orderLeverage : 1,
+        orderQuantity: auto && intent == AlertIntent.sell && orderPercent == null
+            ? orderQuantity
+            : null,
+        orderPercent: auto && intent == AlertIntent.sell ? orderPercent : null,
       ),
     );
     // Toplam sınırı aşılırsa en eski tetiklenmiş alarmları sil.
@@ -308,6 +342,65 @@ class GameController extends ChangeNotifier {
     return hits;
   }
 
+  /// Tetiklenen otomatik emri tetik fiyatından çalıştırır; sonucu açıklar.
+  String _runOrder(PriceAlert a, double price) {
+    final asset = findAsset(a.symbol);
+    if (asset == null) return 'Başarısız: varlık bulunamadı.';
+
+    if (a.intent == AlertIntent.buy) {
+      final margin = a.orderMargin ?? 0;
+      final err = openPosition(
+        asset: asset,
+        side: Side.long,
+        margin: margin,
+        leverage: a.orderLeverage,
+        atPrice: price,
+      );
+      if (err != null) return 'Emir gerçekleşmedi: $err';
+      return 'Alındı: ${fmtQty(margin * a.orderLeverage / price)} adet • ₺${fmtPrice(price)}';
+    }
+
+    // Sat: eldeki long pozisyonlar (eskiden yeniye).
+    final held = _positions
+        .where((p) => p.symbol == a.symbol && p.side == Side.long)
+        .toList();
+    if (held.isEmpty) return 'Emir gerçekleşmedi: satılacak pozisyon yok.';
+
+    var sold = 0.0;
+    if (a.orderPercent != null) {
+      final f = a.orderPercent! / 100;
+      for (final p in held) {
+        final q = f >= 1 ? null : p.quantity * f;
+        final err = closePosition(p.id, atPrice: price, quantity: q);
+        if (err != null) {
+          return sold > 0
+              ? 'Kısmen satıldı: ${fmtQty(sold)} adet. Kalanı: $err'
+              : 'Emir gerçekleşmedi: $err';
+        }
+        sold += q ?? p.quantity;
+      }
+    } else {
+      var remaining = a.orderQuantity ?? 0;
+      for (final p in held) {
+        if (remaining <= 0) break;
+        final q = remaining < p.quantity ? remaining : p.quantity;
+        final err = closePosition(p.id,
+            atPrice: price, quantity: q >= p.quantity ? null : q);
+        if (err != null) {
+          return sold > 0
+              ? 'Kısmen satıldı: ${fmtQty(sold)} adet. Kalanı: $err'
+              : 'Emir gerçekleşmedi: $err';
+        }
+        sold += q;
+        remaining -= q;
+      }
+      if (remaining > 1e-9) {
+        return 'Satıldı: ${fmtQty(sold)} adet • ₺${fmtPrice(price)} (istenen ${fmtQty(a.orderQuantity!)} adetten fazla yoktu)';
+      }
+    }
+    return 'Satıldı: ${fmtQty(sold)} adet • ₺${fmtPrice(price)}';
+  }
+
   // ---- Likidasyon ----
   void _onTick() {
     final liquidated = <Position>[
@@ -317,7 +410,17 @@ class GameController extends ChangeNotifier {
     for (final p in liquidated) {
       _liquidate(p);
     }
-    final hits = _checkAlerts();
+    final hits = <PriceAlert>[];
+    for (final h in _checkAlerts()) {
+      if (!h.auto) {
+        hits.add(h);
+        continue;
+      }
+      final done = h.withNote(_runOrder(h, h.triggeredPrice!));
+      final i = _alerts.indexWhere((x) => x.id == h.id);
+      if (i >= 0) _alerts[i] = done;
+      hits.add(done);
+    }
     if (liquidated.isNotEmpty || hits.isNotEmpty) _persist();
     notifyListeners();
     for (final h in hits) {
