@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../core/constants.dart';
 import '../core/format.dart';
+import '../models/asset.dart';
 import '../models/position.dart';
 import '../state/game_controller.dart';
 import '../widgets/common.dart';
