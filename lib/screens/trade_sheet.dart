@@ -7,6 +7,7 @@ import '../core/format.dart';
 import '../models/asset.dart';
 import '../models/position.dart';
 import '../state/game_controller.dart';
+import '../widgets/common.dart';
 
 class TradeSheet extends StatefulWidget {
   const TradeSheet({super.key, required this.asset, required this.side});
@@ -61,6 +62,13 @@ class _TradeSheetState extends State<TradeSheet> {
     }
   }
 
+  Color _riskColor(int maxLev) {
+    final ratio = _leverage / maxLev;
+    if (ratio < 0.34) return kGreen;
+    if (ratio < 0.67) return Colors.orangeAccent;
+    return kRed;
+  }
+
   @override
   Widget build(BuildContext context) {
     final g = context.watch<GameController>();
@@ -72,25 +80,67 @@ class _TradeSheetState extends State<TradeSheet> {
     final commission = g.commissionFor(asset, _margin, _leverage);
     final liq = Position.liquidationPriceFor(
         side: widget.side, entryPrice: price, leverage: _leverage);
+    final liqDistance =
+        (1 / _leverage - GameConfig.maintenanceMargin) * 100;
     final maxLev = asset.category.maxLeverage;
+    final risk = _riskColor(maxLev);
+    final quickLeverages =
+        const [1, 2, 5, 10, 25, 50, 100].where((l) => l <= maxLev).toList();
 
     return SafeArea(
       child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '${isLong ? 'AL (Long)' : 'SAT (Short)'} • ${asset.symbol}',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleLarge
-                  ?.copyWith(color: color, fontWeight: FontWeight.bold),
+            Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    gradient: isLong ? kBuyGradient : kSellGradient,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(
+                    isLong ? Icons.trending_up : Icons.trending_down,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${isLong ? 'AL (Long)' : 'SAT (Short)'} • ${asset.symbol}',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                          color: color,
+                        ),
+                      ),
+                      Text(
+                        'Güncel fiyat: ₺${fmtPrice(price)}',
+                        style: const TextStyle(color: kMuted, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 4),
-            Text('Güncel fiyat: ₺${fmtPrice(price)}  •  Nakit: ${fmtTl(g.cash)}'),
             const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Kullanılabilir nakit',
+                    style: TextStyle(color: kMuted)),
+                Text(fmtTl(g.cash),
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+              ],
+            ),
+            const SizedBox(height: 10),
             TextField(
               controller: _marginCtrl,
               keyboardType:
@@ -98,78 +148,144 @@ class _TradeSheetState extends State<TradeSheet> {
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
               ],
-              decoration: const InputDecoration(
-                labelText: 'Teminat (₺)',
-                border: OutlineInputBorder(),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              decoration: InputDecoration(
+                labelText: 'Teminat',
+                prefixText: '₺ ',
+                filled: true,
+                fillColor: Colors.white10,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
               ),
               onChanged: (_) => setState(() => _error = null),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                for (final pct in const [10, 25, 50, 100]) ...[
+                  Expanded(
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.white24),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: () => _setPercent(g, pct),
+                      child: Text('%$pct'),
+                    ),
+                  ),
+                  if (pct != 100) const SizedBox(width: 8),
+                ],
+              ],
+            ),
+            const SizedBox(height: 18),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Kaldıraç',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: risk.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text('${_leverage}x',
+                      style: TextStyle(
+                          color: risk,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16)),
+                ),
+              ],
+            ),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                activeTrackColor: risk,
+                thumbColor: risk,
+                inactiveTrackColor: Colors.white12,
+              ),
+              child: Slider(
+                value: _leverage.toDouble(),
+                min: 1,
+                max: maxLev.toDouble(),
+                divisions: maxLev > 1 ? maxLev - 1 : null,
+                onChanged: (v) => setState(() {
+                  _leverage = v.round();
+                  _error = null;
+                }),
+              ),
+            ),
             Wrap(
               spacing: 8,
               children: [
-                for (final pct in const [10, 25, 50, 100])
-                  ActionChip(
-                    label: Text('%$pct'),
-                    onPressed: () => _setPercent(g, pct),
+                for (final l in quickLeverages)
+                  ChoiceChip(
+                    label: Text('${l}x'),
+                    selected: _leverage == l,
+                    showCheckmark: false,
+                    onSelected: (_) => setState(() {
+                      _leverage = l;
+                      _error = null;
+                    }),
                   ),
               ],
             ),
-            const SizedBox(height: 12),
-            Text('Kaldıraç: ${_leverage}x'),
-            Slider(
-              value: _leverage.toDouble(),
-              min: 1,
-              max: maxLev.toDouble(),
-              divisions: maxLev > 1 ? maxLev - 1 : null,
-              label: '${_leverage}x',
-              onChanged: (v) => setState(() {
-                _leverage = v.round();
-                _error = null;
-              }),
+            const SizedBox(height: 16),
+            AppCard(
+              radius: 16,
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                children: [
+                  KeyValueRow('Pozisyon büyüklüğü', fmtTl(notional)),
+                  KeyValueRow('Komisyon', fmtTl(commission)),
+                  KeyValueRow('Toplam gereken', fmtTl(_margin + commission),
+                      bold: true),
+                  const Divider(color: Colors.white10, height: 14),
+                  KeyValueRow('Likidasyon fiyatı', '₺${fmtPrice(liq)}',
+                      valueColor: risk),
+                  KeyValueRow('Likidasyona mesafe',
+                      '%${liqDistance.toStringAsFixed(1).replaceAll('.', ',')}',
+                      valueColor: risk),
+                ],
+              ),
             ),
-            const Divider(),
-            _row('Pozisyon büyüklüğü', fmtTl(notional)),
-            _row('Komisyon', fmtTl(commission)),
-            _row('Toplam gereken', fmtTl(_margin + commission)),
-            _row('Likidasyon fiyatı', '₺${fmtPrice(liq)}'),
             if (_leverage > 1)
               Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  'Fiyat likidasyon seviyesine ulaşırsa teminatın tamamını kaybedersin.',
-                  style: Theme.of(context).textTheme.bodySmall,
+                padding: const EdgeInsets.only(top: 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.warning_amber_rounded, size: 16, color: risk),
+                    const SizedBox(width: 6),
+                    const Expanded(
+                      child: Text(
+                        'Fiyat likidasyon seviyesine ulaşırsa teminatın tamamını kaybedersin.',
+                        style: TextStyle(color: kMuted, fontSize: 12),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             if (_error != null)
               Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(_error!, style: const TextStyle(color: kRed)),
+                padding: const EdgeInsets.only(top: 10),
+                child: Text(_error!,
+                    style: const TextStyle(
+                        color: kRed, fontWeight: FontWeight.w600)),
               ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: color,
-                  foregroundColor: isLong ? Colors.black : Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
-                onPressed: _submit,
-                child: const Text('Onayla'),
-              ),
+            const SizedBox(height: 16),
+            GradientButton(
+              label: 'Onayla',
+              icon: isLong ? Icons.trending_up : Icons.trending_down,
+              gradient: isLong ? kBuyGradient : kSellGradient,
+              onPressed: _submit,
             ),
           ],
         ),
       ),
     );
   }
-
-  Widget _row(String k, String v) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [Text(k), Text(v)],
-        ),
-      );
 }

@@ -20,7 +20,26 @@ class GameConfig {
   static const int maxHistory = 200;
 }
 
+// ---- Renkler ----
+const Color kBg = Color(0xFF0B0F1A);
+const Color kCard = Color(0xFF151B2B);
+const Color kAccent = Color(0xFF7C6CFF);
 const Color kGreen = Color(0xFF16C784);
 const Color kRed = Color(0xFFEA3943);
+const Color kMuted = Color(0xFF8A93A8);
+
+const LinearGradient kHeroGradient = LinearGradient(
+  begin: Alignment.topLeft,
+  end: Alignment.bottomRight,
+  colors: [Color(0xFF6C5CE7), Color(0xFF00B8A9)],
+);
+
+const LinearGradient kBuyGradient = LinearGradient(
+  colors: [Color(0xFF1BD38F), Color(0xFF0E9F6E)],
+);
+
+const LinearGradient kSellGradient = LinearGradient(
+  colors: [Color(0xFFF2545B), Color(0xFFB4232C)],
+);
 
 Color? pnlColor(double v) => v > 0 ? kGreen : (v < 0 ? kRed : null);
