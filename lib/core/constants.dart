@@ -18,6 +18,12 @@ class GameConfig {
 
   /// Kayıtlı işlem geçmişi üst sınırı.
   static const int maxHistory = 200;
+
+  /// Aynı anda kurulabilecek aktif alarm sayısı.
+  static const int maxActiveAlerts = 30;
+
+  /// Aktif + tetiklenmiş toplam alarm sayısı (eskiler silinir).
+  static const int maxAlerts = 60;
 }
 
 // ---- Renkler ----

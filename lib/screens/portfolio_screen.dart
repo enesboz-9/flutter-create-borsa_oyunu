@@ -332,9 +332,11 @@ class _PositionCard extends StatelessWidget {
                         icon: const Icon(Icons.close, size: 18),
                         label: const Text('Pozisyonu kapat'),
                         onPressed: () {
+                          // Ekranda gördüğün fiyattan kapat; basış anından
+                          // sonra gelen tik fiyatı sonucu değiştirmez.
                           final err = context
                               .read<GameController>()
-                              .closePosition(p.id);
+                              .closePosition(p.id, atPrice: price);
                           if (err != null) {
                             ScaffoldMessenger.of(context)
                                 .showSnackBar(SnackBar(content: Text(err)));

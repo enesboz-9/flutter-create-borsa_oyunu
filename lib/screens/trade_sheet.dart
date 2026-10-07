@@ -9,6 +9,19 @@ import '../models/position.dart';
 import '../state/game_controller.dart';
 import '../widgets/common.dart';
 
+/// İşlem (AL/SAT) sayfasını açar. Alarm bildiriminden de kullanılır.
+void showTradeSheet(BuildContext context, Asset asset, Side side) {
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (ctx) => Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+      child: TradeSheet(asset: asset, side: side),
+    ),
+  );
+}
+
 class TradeSheet extends StatefulWidget {
   const TradeSheet({super.key, required this.asset, required this.side});
 
@@ -23,6 +36,9 @@ class _TradeSheetState extends State<TradeSheet> {
   final _marginCtrl = TextEditingController();
   int _leverage = 1;
   String? _error;
+
+  /// Ekranda en son gösterilen fiyat. Onaya basınca işlem bu fiyattan yapılır.
+  double _shownPrice = 0;
 
   double get _margin =>
       double.tryParse(_marginCtrl.text.replaceAll(',', '.')) ?? 0;
@@ -54,6 +70,7 @@ class _TradeSheetState extends State<TradeSheet> {
           side: widget.side,
           margin: _margin,
           leverage: _leverage,
+          atPrice: _shownPrice > 0 ? _shownPrice : null,
         );
     if (err != null) {
       setState(() => _error = err);
@@ -76,6 +93,7 @@ class _TradeSheetState extends State<TradeSheet> {
     final isLong = widget.side == Side.long;
     final color = isLong ? kGreen : kRed;
     final price = g.priceOf(asset.symbol);
+    _shownPrice = price;
     final notional = _margin * _leverage;
     final commission = g.commissionFor(asset, _margin, _leverage);
     final liq = Position.liquidationPriceFor(

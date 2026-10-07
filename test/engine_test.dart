@@ -1,5 +1,6 @@
 import 'package:borsa_oyunu/data/assets_catalog.dart';
 import 'package:borsa_oyunu/models/position.dart';
+import 'package:borsa_oyunu/models/price_alert.dart';
 import 'package:borsa_oyunu/services/game_repository.dart';
 import 'package:borsa_oyunu/services/price_service.dart';
 import 'package:borsa_oyunu/state/game_controller.dart';
@@ -7,6 +8,14 @@ import 'package:flutter_test/flutter_test.dart';
 
 class FakePrices implements PriceService {
   double price = 100;
+  void Function()? _onUpdate;
+
+  /// Fiyatı değiştirip controller'a tik gönderir.
+  void tick(double p) {
+    price = p;
+    _onUpdate?.call();
+  }
+
   @override
   double priceOf(String symbol) => price;
   @override
@@ -14,7 +23,7 @@ class FakePrices implements PriceService {
   @override
   List<double> history(String symbol) => const [];
   @override
-  void start(void Function() onUpdate) {}
+  void start(void Function() onUpdate) => _onUpdate = onUpdate;
   @override
   void stop() {}
 }
@@ -77,5 +86,85 @@ void main() {
     prices.price = 90;
     final p = g.positions.first;
     expect(p.pnlAt(90), closeTo(50000, 1e-6));
+  });
+  test('kapatırken fiyat değişse de ekrandaki fiyattan kapanır', () async {
+    final prices = FakePrices();
+    final g = GameController(prices, MemRepo());
+    await g.init();
+    final btc = kAssets.firstWhere((a) => a.symbol == 'BTC');
+
+    g.openPosition(asset: btc, side: Side.long, margin: 100000, leverage: 10);
+    // Kullanıcı 100 TL'yi görürken basıyor, o sırada fiyat 120'ye çıkıyor.
+    prices.price = 120;
+    g.closePosition(g.positions.first.id, atPrice: 100);
+
+    expect(g.history.first.exitPrice, 100);
+    expect(g.history.first.grossPnl, closeTo(0, 1e-9));
+    expect(g.cash, closeTo(1000000 - 2000, 0.01));
+  });
+
+  test('atPrice verilmezse güncel fiyattan kapanır', () async {
+    final prices = FakePrices();
+    final g = GameController(prices, MemRepo());
+    await g.init();
+    final btc = kAssets.firstWhere((a) => a.symbol == 'BTC');
+
+    g.openPosition(asset: btc, side: Side.long, margin: 100000, leverage: 10);
+    prices.price = 110;
+    g.closePosition(g.positions.first.id);
+    expect(g.history.first.exitPrice, 110);
+  });
+
+  test('yukarı yönlü alarm hedefe ulaşınca bir kez tetiklenir', () async {
+    final prices = FakePrices();
+    final g = GameController(prices, MemRepo());
+    await g.init();
+    final btc = kAssets.firstWhere((a) => a.symbol == 'BTC');
+    final hits = <PriceAlert>[];
+    g.alertHits.listen(hits.add);
+
+    expect(g.addAlert(asset: btc, targetPrice: 110, intent: AlertIntent.buy),
+        isNull);
+    expect(g.alerts.single.direction, AlertDirection.above);
+    expect(g.activeAlertCount, 1);
+
+    prices.tick(105);
+    await Future<void>.delayed(Duration.zero);
+    expect(hits, isEmpty);
+
+    prices.tick(111);
+    await Future<void>.delayed(Duration.zero);
+    expect(hits.length, 1);
+    expect(hits.first.triggeredPrice, 111);
+    expect(g.activeAlertCount, 0);
+
+    prices.tick(115);
+    await Future<void>.delayed(Duration.zero);
+    expect(hits.length, 1);
+  });
+
+  test('aşağı yönlü alarm fiyat düşünce tetiklenir', () async {
+    final prices = FakePrices();
+    final g = GameController(prices, MemRepo());
+    await g.init();
+    final btc = kAssets.firstWhere((a) => a.symbol == 'BTC');
+    final hits = <PriceAlert>[];
+    g.alertHits.listen(hits.add);
+
+    g.addAlert(asset: btc, targetPrice: 90);
+    expect(g.alerts.single.direction, AlertDirection.below);
+
+    prices.tick(89);
+    await Future<void>.delayed(Duration.zero);
+    expect(hits.length, 1);
+  });
+
+  test('geçersiz alarm hedefleri reddedilir', () async {
+    final g = GameController(FakePrices(), MemRepo());
+    await g.init();
+    final btc = kAssets.firstWhere((a) => a.symbol == 'BTC');
+    expect(g.addAlert(asset: btc, targetPrice: 0), isNotNull);
+    expect(g.addAlert(asset: btc, targetPrice: 100), isNotNull); // güncel fiyat
+    expect(g.alerts, isEmpty);
   });
 }

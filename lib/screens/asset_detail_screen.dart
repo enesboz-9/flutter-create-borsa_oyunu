@@ -10,6 +10,7 @@ import '../models/asset.dart';
 import '../models/position.dart';
 import '../state/game_controller.dart';
 import '../widgets/common.dart';
+import 'alert_sheet.dart';
 import 'trade_sheet.dart';
 
 class AssetDetailScreen extends StatelessWidget {
@@ -17,17 +18,8 @@ class AssetDetailScreen extends StatelessWidget {
 
   final Asset asset;
 
-  void _openSheet(BuildContext context, Side side) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-        child: TradeSheet(asset: asset, side: side),
-      ),
-    );
-  }
+  void _openSheet(BuildContext context, Side side) =>
+      showTradeSheet(context, asset, side);
 
   @override
   Widget build(BuildContext context) {
@@ -39,6 +31,7 @@ class AssetDetailScreen extends StatelessWidget {
     final open = isMarketOpen(asset);
     final myPositions =
         game.positions.where((p) => p.symbol == asset.symbol).toList();
+    final alertCount = game.activeAlertCountFor(asset.symbol);
 
     final low = hist.isEmpty ? price : hist.reduce((a, b) => a < b ? a : b);
     final high = hist.isEmpty ? price : hist.reduce((a, b) => a > b ? a : b);
@@ -47,6 +40,19 @@ class AssetDetailScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(asset.symbol, style: const TextStyle(fontSize: 20)),
+        actions: [
+          IconButton(
+            tooltip: 'Fiyat alarmı',
+            onPressed: () => showAlertSheet(context, asset),
+            icon: Badge(
+              isLabelVisible: alertCount > 0,
+              label: Text('$alertCount'),
+              child: Icon(alertCount > 0
+                  ? Icons.notifications_active
+                  : Icons.notifications_none),
+            ),
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),

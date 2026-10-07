@@ -9,11 +9,13 @@ import '../core/market_hours.dart';
 import '../data/assets_catalog.dart';
 import '../models/asset.dart';
 import '../models/position.dart';
+import '../models/price_alert.dart';
 import '../models/trade_record.dart';
 import '../services/game_repository.dart';
 import '../services/price_service.dart';
 
-/// Oyunun tüm iş mantığı burada: pozisyon açma/kapama, komisyon, likidasyon.
+/// Oyunun tüm iş mantığı burada: pozisyon açma/kapama, komisyon, likidasyon,
+/// fiyat alarmları.
 ///
 /// Not: Veritabanına geçince bu hesapların sunucuda (Edge Function / DB
 /// fonksiyonu) yapılması gerekir; aksi halde istemci bakiyeyi değiştirebilir.
@@ -26,15 +28,23 @@ class GameController extends ChangeNotifier {
   double _cash = GameConfig.startingBalance;
   List<Position> _positions = [];
   List<TradeRecord> _history = [];
+  List<PriceAlert> _alerts = [];
   bool _ready = false;
 
   final StreamController<String> _events = StreamController<String>.broadcast();
   Stream<String> get events => _events.stream;
 
+  /// Bir alarm tetiklendiğinde yayınlanır (arayüz bildirim gösterir).
+  final StreamController<PriceAlert> _alertHits =
+      StreamController<PriceAlert>.broadcast();
+  Stream<PriceAlert> get alertHits => _alertHits.stream;
+
   bool get ready => _ready;
   double get cash => _cash;
   List<Position> get positions => List.unmodifiable(_positions);
   List<TradeRecord> get history => List.unmodifiable(_history);
+  List<PriceAlert> get alerts => List.unmodifiable(_alerts);
+  int get activeAlertCount => _alerts.where((a) => a.isActive).length;
 
   Future<void> init() async {
     final s = await _repo.load();
@@ -42,6 +52,7 @@ class GameController extends ChangeNotifier {
       _cash = s.cash;
       _positions = List.of(s.positions);
       _history = List.of(s.history);
+      _alerts = List.of(s.alerts);
     }
     _prices.start(_onTick);
     _ready = true;
@@ -50,6 +61,13 @@ class GameController extends ChangeNotifier {
 
   // ---- Fiyat erişimi ----
   Asset assetOf(String symbol) => kAssets.firstWhere((a) => a.symbol == symbol);
+  Asset? findAsset(String symbol) {
+    for (final a in kAssets) {
+      if (a.symbol == symbol) return a;
+    }
+    return null;
+  }
+
   double priceOf(String symbol) => _prices.priceOf(symbol);
   double changePercent(String symbol) => _prices.changePercent(symbol);
   List<double> historyOf(String symbol) => _prices.history(symbol);
@@ -75,6 +93,7 @@ class GameController extends ChangeNotifier {
     required Side side,
     required double margin,
     required int leverage,
+    double? atPrice,
   }) {
     if (margin <= 0) return 'Teminat tutarını girin.';
     if (leverage < 1 || leverage > asset.category.maxLeverage) {
@@ -83,7 +102,11 @@ class GameController extends ChangeNotifier {
     if (GameConfig.enforceMarketHours && !isMarketOpen(asset)) {
       return '${asset.name} piyasası şu an kapalı.';
     }
-    final price = priceOf(asset.symbol);
+    // atPrice: kullanıcının ekranda gördüğü fiyat. Verilirse işlem tam bu
+    // fiyattan yapılır; onay anında gelen tik fiyatı etkilemez.
+    final price = (atPrice != null && atPrice > 0)
+        ? atPrice
+        : priceOf(asset.symbol);
     if (price <= 0) return 'Fiyat alınamadı.';
 
     final commission = commissionFor(asset, margin, leverage);
@@ -109,7 +132,10 @@ class GameController extends ChangeNotifier {
     return null;
   }
 
-  String? closePosition(String id) {
+  /// [atPrice]: kullanıcının butona bastığı anda ekranda gördüğü fiyat.
+  /// Verilirse pozisyon tam bu fiyattan kapanır; arada gelen fiyat
+  /// güncellemeleri sonucu etkilemez. Verilmezse güncel fiyat kullanılır.
+  String? closePosition(String id, {double? atPrice}) {
     final idx = _positions.indexWhere((p) => p.id == id);
     if (idx < 0) return 'Pozisyon bulunamadı.';
     final p = _positions[idx];
@@ -117,7 +143,8 @@ class GameController extends ChangeNotifier {
     if (GameConfig.enforceMarketHours && !isMarketOpen(asset)) {
       return '${asset.name} piyasası şu an kapalı.';
     }
-    final price = priceOf(p.symbol);
+    final price =
+        (atPrice != null && atPrice > 0) ? atPrice : priceOf(p.symbol);
     final gross = p.pnlAt(price);
     final closeCommission = price * p.quantity * asset.category.commissionRate;
 
@@ -139,7 +166,7 @@ class GameController extends ChangeNotifier {
     );
     _history.insert(0, record);
     _events.add(
-        '${p.symbol} pozisyonu kapatıldı. Net: ${fmtSigned(record.netPnl)}');
+        '${p.symbol} ₺${fmtPrice(price)} fiyatından kapatıldı. Net: ${fmtSigned(record.netPnl)}');
     _persist();
     notifyListeners();
     return null;
@@ -149,8 +176,83 @@ class GameController extends ChangeNotifier {
     _cash = GameConfig.startingBalance;
     _positions = [];
     _history = [];
+    _alerts = [];
     await _repo.clear();
     notifyListeners();
+  }
+
+  // ---- Fiyat alarmları ----
+  List<PriceAlert> alertsFor(String symbol) =>
+      _alerts.where((a) => a.symbol == symbol).toList();
+
+  int activeAlertCountFor(String symbol) =>
+      _alerts.where((a) => a.symbol == symbol && a.isActive).length;
+
+  /// Başarılıysa null, değilse hata mesajı döner.
+  /// Yön (yukarı/aşağı) hedef fiyatın güncel fiyata göre konumundan belirlenir.
+  String? addAlert({
+    required Asset asset,
+    required double targetPrice,
+    AlertIntent intent = AlertIntent.none,
+  }) {
+    if (targetPrice <= 0) return 'Hedef fiyatı girin.';
+    final price = priceOf(asset.symbol);
+    if (price <= 0) return 'Fiyat alınamadı.';
+    if ((targetPrice - price).abs() / price < 1e-6) {
+      return 'Hedef fiyat güncel fiyattan farklı olmalı.';
+    }
+    if (activeAlertCount >= GameConfig.maxActiveAlerts) {
+      return 'En fazla ${GameConfig.maxActiveAlerts} aktif alarm kurabilirsin.';
+    }
+
+    _alerts.insert(
+      0,
+      PriceAlert(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        symbol: asset.symbol,
+        targetPrice: targetPrice,
+        direction:
+            targetPrice > price ? AlertDirection.above : AlertDirection.below,
+        intent: intent,
+        createdAt: DateTime.now(),
+      ),
+    );
+    // Toplam sınırı aşılırsa en eski tetiklenmiş alarmları sil.
+    while (_alerts.length > GameConfig.maxAlerts) {
+      final idx = _alerts.lastIndexWhere((a) => !a.isActive);
+      if (idx < 0) break;
+      _alerts.removeAt(idx);
+    }
+    _persist();
+    notifyListeners();
+    return null;
+  }
+
+  void removeAlert(String id) {
+    _alerts.removeWhere((a) => a.id == id);
+    _persist();
+    notifyListeners();
+  }
+
+  void clearTriggeredAlerts() {
+    _alerts.removeWhere((a) => !a.isActive);
+    _persist();
+    notifyListeners();
+  }
+
+  List<PriceAlert> _checkAlerts() {
+    final hits = <PriceAlert>[];
+    for (var i = 0; i < _alerts.length; i++) {
+      final a = _alerts[i];
+      if (!a.isActive) continue;
+      final price = priceOf(a.symbol);
+      if (price > 0 && a.isHitBy(price)) {
+        final t = a.triggered(price, DateTime.now());
+        _alerts[i] = t;
+        hits.add(t);
+      }
+    }
+    return hits;
   }
 
   // ---- Likidasyon ----
@@ -162,8 +264,12 @@ class GameController extends ChangeNotifier {
     for (final p in liquidated) {
       _liquidate(p);
     }
-    if (liquidated.isNotEmpty) _persist();
+    final hits = _checkAlerts();
+    if (liquidated.isNotEmpty || hits.isNotEmpty) _persist();
     notifyListeners();
+    for (final h in hits) {
+      _alertHits.add(h);
+    }
   }
 
   void _liquidate(Position p) {
@@ -193,6 +299,7 @@ class GameController extends ChangeNotifier {
       cash: _cash,
       positions: _positions,
       history: _history,
+      alerts: _alerts,
     )));
   }
 
@@ -200,6 +307,7 @@ class GameController extends ChangeNotifier {
   void dispose() {
     _prices.stop();
     _events.close();
+    _alertHits.close();
     super.dispose();
   }
 }

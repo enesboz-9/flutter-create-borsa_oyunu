@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants.dart';
 import '../models/position.dart';
+import '../models/price_alert.dart';
 import '../models/trade_record.dart';
 
 class GameSnapshot {
@@ -11,11 +12,13 @@ class GameSnapshot {
     required this.cash,
     required this.positions,
     required this.history,
+    this.alerts = const [],
   });
 
   final double cash;
   final List<Position> positions;
   final List<TradeRecord> history;
+  final List<PriceAlert> alerts;
 }
 
 /// Oyun durumunun saklandığı yer.
@@ -46,6 +49,10 @@ class LocalGameRepository implements GameRepository {
         history: (m['history'] as List)
             .map((e) => TradeRecord.fromJson(e as Map<String, dynamic>))
             .toList(),
+        // Eski kayıtlarda 'alerts' yoktur.
+        alerts: ((m['alerts'] as List?) ?? const [])
+            .map((e) => PriceAlert.fromJson(e as Map<String, dynamic>))
+            .toList(),
       );
     } catch (_) {
       return null;
@@ -64,6 +71,7 @@ class LocalGameRepository implements GameRepository {
         'cash': s.cash,
         'positions': s.positions.map((e) => e.toJson()).toList(),
         'history': history.map((e) => e.toJson()).toList(),
+        'alerts': s.alerts.map((e) => e.toJson()).toList(),
       }),
     );
   }

@@ -4,10 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/constants.dart';
+import '../core/format.dart';
+import '../models/position.dart';
+import '../models/price_alert.dart';
 import '../state/game_controller.dart';
+import 'alerts_screen.dart';
 import 'history_screen.dart';
 import 'market_screen.dart';
 import 'portfolio_screen.dart';
+import 'trade_sheet.dart';
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
@@ -19,6 +24,7 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
   StreamSubscription<String>? _sub;
+  StreamSubscription<PriceAlert>? _alertSub;
 
   static const _titles = ['Piyasa', 'Portföy', 'Geçmiş'];
   static const _pages = <Widget>[
@@ -30,6 +36,10 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
+    _alertSub = context.read<GameController>().alertHits.listen((a) {
+      if (!mounted) return;
+      _showAlertHit(a);
+    });
     _sub = context.read<GameController>().events.listen((message) {
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context);
@@ -40,8 +50,31 @@ class _HomeShellState extends State<HomeShell> {
     });
   }
 
+  void _showAlertHit(PriceAlert a) {
+    final g = context.read<GameController>();
+    final asset = g.findAsset(a.symbol);
+    final side = a.intent.side;
+    final reached = a.triggeredPrice ?? a.targetPrice;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 10),
+        content: Text(
+            'Alarm: ${a.symbol} ₺${fmtPrice(a.targetPrice)} hedefine ulaştı (şu an ₺${fmtPrice(reached)}).'),
+        action: (asset == null || side == null)
+            ? null
+            : SnackBarAction(
+                label: side == Side.long ? 'AL' : 'SAT',
+                onPressed: () => showTradeSheet(context, asset, side),
+              ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
+    _alertSub?.cancel();
     _sub?.cancel();
     super.dispose();
   }
@@ -74,11 +107,29 @@ class _HomeShellState extends State<HomeShell> {
   Widget build(BuildContext context) {
     final openCount =
         context.select<GameController, int>((g) => g.positions.length);
+    final alertCount =
+        context.select<GameController, int>((g) => g.activeAlertCount);
 
     return Scaffold(
       appBar: AppBar(
         title: Text(_titles[_index]),
         actions: [
+          IconButton(
+            tooltip: 'Alarmlar',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const AlertsScreen()),
+            ),
+            icon: Badge(
+              isLabelVisible: alertCount > 0,
+              label: Text('$alertCount'),
+              child: Icon(
+                alertCount > 0
+                    ? Icons.notifications_active
+                    : Icons.notifications_none,
+                color: kMuted,
+              ),
+            ),
+          ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert, color: kMuted),
             onSelected: (v) {
