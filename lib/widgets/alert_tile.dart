@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../core/constants.dart';
 import '../core/format.dart';
+import '../data/assets_catalog.dart';
+import '../models/asset.dart';
 import '../models/price_alert.dart';
 import 'common.dart';
 
@@ -28,6 +30,7 @@ class AlertTile extends StatelessWidget {
     final active = alert.isActive;
     final color = active ? (up ? kGreen : kRed) : kMuted;
 
+    final cur = assetBySymbol(alert.symbol)?.currency ?? Currency.tl;
     final isBuy = alert.intent == AlertIntent.buy;
     final String subtitle;
     if (active) {
@@ -36,10 +39,10 @@ class AlertTile extends StatelessWidget {
           : 0.0;
       final distText = dist.abs().toStringAsFixed(2).replaceAll('.', ',');
       subtitle =
-          '${alert.auto ? '${alert.orderSummary} • ' : ''}${up ? 'Yukarı' : 'Aşağı'} yönlü • şu an %$distText uzakta';
+          '${alert.auto ? '${alert.orderSummary(cur)} • ' : ''}${up ? 'Yukarı' : 'Aşağı'} yönlü • şu an %$distText uzakta';
     } else {
       subtitle =
-          '${alert.note != null ? '${alert.note}\n' : ''}Tetiklendi • ${fmtDate(alert.triggeredAt!)} • ₺${fmtPrice(alert.triggeredPrice ?? alert.targetPrice)}';
+          '${alert.note != null ? '${alert.note}\n' : ''}Tetiklendi • ${fmtDate(alert.triggeredAt!)} • ${fmtPriceIn(alert.triggeredPrice ?? alert.targetPrice, cur)}';
     }
 
     return AppCard(
@@ -73,8 +76,8 @@ class AlertTile extends StatelessWidget {
                     Flexible(
                       child: Text(
                         showSymbol
-                            ? '${alert.symbol}  ₺${fmtPrice(alert.targetPrice)}'
-                            : '₺${fmtPrice(alert.targetPrice)}',
+                            ? '${alert.symbol}  ${fmtPriceIn(alert.targetPrice, cur)}'
+                            : fmtPriceIn(alert.targetPrice, cur),
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontWeight: FontWeight.w800,

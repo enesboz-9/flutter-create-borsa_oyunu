@@ -26,6 +26,7 @@ class GameController extends ChangeNotifier {
   final GameRepository _repo;
 
   double _cash = GameConfig.startingBalance;
+  double _usdCash = 0;
   List<Position> _positions = [];
   List<TradeRecord> _history = [];
   List<PriceAlert> _alerts = [];
@@ -41,6 +42,7 @@ class GameController extends ChangeNotifier {
 
   bool get ready => _ready;
   double get cash => _cash;
+  double get usdCash => _usdCash;
   List<Position> get positions => List.unmodifiable(_positions);
   List<TradeRecord> get history => List.unmodifiable(_history);
   List<PriceAlert> get alerts => List.unmodifiable(_alerts);
@@ -50,6 +52,7 @@ class GameController extends ChangeNotifier {
     final s = await _repo.load();
     if (s != null) {
       _cash = s.cash;
+      _usdCash = s.usdCash;
       _positions = List.of(s.positions);
       _history = List.of(s.history);
       _alerts = List.of(s.alerts);
@@ -60,28 +63,113 @@ class GameController extends ChangeNotifier {
   }
 
   // ---- Fiyat erişimi ----
-  Asset assetOf(String symbol) => kAssets.firstWhere((a) => a.symbol == symbol);
-  Asset? findAsset(String symbol) {
-    for (final a in kAssets) {
-      if (a.symbol == symbol) return a;
-    }
-    return null;
-  }
+  Asset assetOf(String symbol) => assetBySymbol(symbol)!;
+  Asset? findAsset(String symbol) => assetBySymbol(symbol);
+
+  /// Sembolün işlem para birimi (bilinmiyorsa TL).
+  Currency currencyOf(String symbol) =>
+      assetBySymbol(symbol)?.currency ?? Currency.tl;
 
   double priceOf(String symbol) => _prices.priceOf(symbol);
   double changePercent(String symbol) => _prices.changePercent(symbol);
   List<double> historyOf(String symbol) => _prices.history(symbol);
 
   // ---- Hesap özeti ----
-  double get usedMargin => _positions.fold(0.0, (s, p) => s + p.margin);
+  /// Dolar/TL kuru (dolarlı varlıkları TL'ye çevirmek için).
+  double get usdTry => priceOf(GameConfig.usdTrySymbol);
 
+  /// Verilen para birimindeki tutarı TL karşılığına çevirir.
+  double toTl(Currency c, double v) => c == Currency.usd ? v * usdTry : v;
+
+  /// Para birimine göre kullanılabilir nakit.
+  double cashOf(Currency c) => c == Currency.usd ? _usdCash : _cash;
+
+  void _addCash(Currency c, double delta) {
+    if (c == Currency.usd) {
+      _usdCash = max(0.0, _usdCash + delta);
+    } else {
+      _cash = max(0.0, _cash + delta);
+    }
+  }
+
+  double _marginIn(Currency c) => _positions
+      .where((p) => currencyOf(p.symbol) == c)
+      .fold(0.0, (s, p) => s + p.margin);
+
+  double _pnlIn(Currency c) => _positions
+      .where((p) => currencyOf(p.symbol) == c)
+      .fold(0.0, (s, p) => s + p.pnlAt(priceOf(p.symbol)));
+
+  /// Açık pozisyonlardaki teminat (TL karşılığı).
+  double get usedMargin =>
+      _marginIn(Currency.tl) + toTl(Currency.usd, _marginIn(Currency.usd));
+
+  /// Açık pozisyonlardaki gerçekleşmemiş K/Z (TL karşılığı).
   double get unrealizedPnl =>
-      _positions.fold(0.0, (s, p) => s + p.pnlAt(priceOf(p.symbol)));
+      _pnlIn(Currency.tl) + toTl(Currency.usd, _pnlIn(Currency.usd));
 
-  double get equity => _cash + usedMargin + unrealizedPnl;
+  double get usedMarginUsd => _marginIn(Currency.usd);
+  double get unrealizedPnlUsd => _pnlIn(Currency.usd);
+
+  /// Dolar cinsinden toplam varlık: dolar nakit + ABD pozisyonları (teminat + K/Z).
+  double get usdHoldings => _usdCash + usedMarginUsd + unrealizedPnlUsd;
+
+  /// Dolar nakdi ya da ABD pozisyonu var mı? (Toplam varlıkta $ gösterilir.)
+  bool get hasUsd =>
+      _usdCash > 1e-9 ||
+      _positions.any((p) => currencyOf(p.symbol) == Currency.usd);
+
+  /// Toplam varlık (TL). Dolar bakiyesi ve ABD pozisyonları güncel kurdan
+  /// TL'ye çevrilerek dahil edilir.
+  double get equity =>
+      _cash + toTl(Currency.usd, _usdCash) + usedMargin + unrealizedPnl;
 
   double get totalReturnPercent =>
       (equity - GameConfig.startingBalance) / GameConfig.startingBalance * 100;
+
+  // ---- Dolar al / sat (TL ⇄ USD) ----
+  /// Elindeki TL ile (komisyon dahil) alınabilecek en yüksek dolar.
+  double get maxBuyableUsd {
+    final rate = usdTry;
+    if (rate <= 0) return 0;
+    final raw = _cash / (rate * (1 + GameConfig.exchangeCommission));
+    return (raw * 100).floorToDouble() / 100;
+  }
+
+  /// TL ile dolar alır. [atRate]: kullanıcının ekranda gördüğü kur.
+  /// Başarılıysa null, değilse hata mesajı döner.
+  String? buyUsd(double usdAmount, {double? atRate}) {
+    if (usdAmount <= 0) return 'Alınacak dolar tutarını girin.';
+    final rate = (atRate != null && atRate > 0) ? atRate : usdTry;
+    if (rate <= 0) return 'Kur alınamadı.';
+    final tl = usdAmount * rate;
+    final commission = tl * GameConfig.exchangeCommission;
+    if (tl + commission > _cash + 1e-9) return 'Yetersiz TL bakiyesi.';
+    _cash -= tl + commission;
+    _usdCash += usdAmount;
+    _events.add(
+        '${fmtUsd(usdAmount)} satın alındı • kur ₺${fmtPrice(rate)} • ödenen ${fmtTl(tl + commission)} (komisyon ${fmtTl(commission)})');
+    _persist();
+    notifyListeners();
+    return null;
+  }
+
+  /// Dolarını TL'ye çevirir. Başarılıysa null, değilse hata mesajı döner.
+  String? sellUsd(double usdAmount, {double? atRate}) {
+    if (usdAmount <= 0) return 'Satılacak dolar tutarını girin.';
+    final rate = (atRate != null && atRate > 0) ? atRate : usdTry;
+    if (rate <= 0) return 'Kur alınamadı.';
+    if (usdAmount > _usdCash + 1e-9) return 'Yetersiz dolar bakiyesi.';
+    final tl = usdAmount * rate;
+    final commission = tl * GameConfig.exchangeCommission;
+    _usdCash = max(0.0, _usdCash - usdAmount);
+    _cash += tl - commission;
+    _events.add(
+        '${fmtUsd(usdAmount)} satıldı • kur ₺${fmtPrice(rate)} • hesabına geçen ${fmtTl(tl - commission)} (komisyon ${fmtTl(commission)})');
+    _persist();
+    notifyListeners();
+    return null;
+  }
 
   // ---- İşlemler ----
   double commissionFor(Asset asset, double margin, int leverage) =>
@@ -109,8 +197,13 @@ class GameController extends ChangeNotifier {
         : priceOf(asset.symbol);
     if (price <= 0) return 'Fiyat alınamadı.';
 
+    final cur = asset.currency;
     final commission = commissionFor(asset, margin, leverage);
-    if (margin + commission > _cash + 1e-9) return 'Yetersiz bakiye.';
+    if (margin + commission > cashOf(cur) + 1e-9) {
+      return cur == Currency.usd
+          ? 'Yetersiz dolar bakiyesi. ABD hisseleri için önce dolar almalısın.'
+          : 'Yetersiz bakiye.';
+    }
 
     final newQty = margin * leverage / price;
     // Aynı varlık + yön + kaldıraç varsa mevcut pozisyona eklenir ve
@@ -142,9 +235,9 @@ class GameController extends ChangeNotifier {
       );
       _positions.add(held);
     }
-    _cash -= margin + commission;
+    _addCash(cur, -(margin + commission));
     _events.add(
-        '${asset.symbol} ${side == Side.long ? 'LONG' : 'SHORT'} ${leverage}x: ${fmtQty(newQty)} adet ₺${fmtPrice(price)} fiyatından alındı. Komisyon: ${fmtTl(commission)} • Ort. maliyet: ₺${fmtPrice(held.avgCost)}');
+        '${asset.symbol} ${side == Side.long ? 'LONG' : 'SHORT'} ${leverage}x: ${fmtQty(newQty)} adet ${fmtPriceIn(price, cur)} fiyatından alındı. Komisyon: ${fmtMoney(commission, cur)} • Ort. maliyet: ${fmtPriceIn(held.avgCost, cur)}');
     _persist();
     notifyListeners();
     return null;
@@ -192,7 +285,7 @@ class GameController extends ChangeNotifier {
         : (p.entryPrice - price) * qty;
     final closeCommission = price * qty * asset.category.commissionRate;
 
-    _cash += max(0.0, marginPart + gross - closeCommission);
+    _addCash(asset.currency, max(0.0, marginPart + gross - closeCommission));
     if (full) {
       _positions.removeAt(idx);
     } else {
@@ -219,7 +312,7 @@ class GameController extends ChangeNotifier {
     );
     _history.insert(0, record);
     _events.add(
-        '${p.symbol} ${fmtQty(qty)} adet ₺${fmtPrice(price)} fiyatından ${full ? 'kapatıldı' : 'satıldı'}. Net: ${fmtSigned(record.netPnl)}');
+        '${p.symbol} ${fmtQty(qty)} adet ${fmtPriceIn(price, asset.currency)} fiyatından ${full ? 'kapatıldı' : 'satıldı'}. Net: ${fmtSignedIn(record.netPnl, asset.currency)}');
     _persist();
     notifyListeners();
     return null;
@@ -227,6 +320,7 @@ class GameController extends ChangeNotifier {
 
   Future<void> resetGame() async {
     _cash = GameConfig.startingBalance;
+    _usdCash = 0;
     _positions = [];
     _history = [];
     _alerts = [];
@@ -357,7 +451,7 @@ class GameController extends ChangeNotifier {
         atPrice: price,
       );
       if (err != null) return 'Emir gerçekleşmedi: $err';
-      return 'Alındı: ${fmtQty(margin * a.orderLeverage / price)} adet • ₺${fmtPrice(price)}';
+      return 'Alındı: ${fmtQty(margin * a.orderLeverage / price)} adet • ${fmtPriceIn(price, asset.currency)}';
     }
 
     // Sat: eldeki long pozisyonlar (eskiden yeniye).
@@ -395,10 +489,10 @@ class GameController extends ChangeNotifier {
         remaining -= q;
       }
       if (remaining > 1e-9) {
-        return 'Satıldı: ${fmtQty(sold)} adet • ₺${fmtPrice(price)} (istenen ${fmtQty(a.orderQuantity!)} adetten fazla yoktu)';
+        return 'Satıldı: ${fmtQty(sold)} adet • ${fmtPriceIn(price, asset.currency)} (istenen ${fmtQty(a.orderQuantity!)} adetten fazla yoktu)';
       }
     }
-    return 'Satıldı: ${fmtQty(sold)} adet • ₺${fmtPrice(price)}';
+    return 'Satıldı: ${fmtQty(sold)} adet • ${fmtPriceIn(price, asset.currency)}';
   }
 
   // ---- Likidasyon ----
@@ -454,6 +548,7 @@ class GameController extends ChangeNotifier {
   void _persist() {
     unawaited(_repo.save(GameSnapshot(
       cash: _cash,
+      usdCash: _usdCash,
       positions: _positions,
       history: _history,
       alerts: _alerts,

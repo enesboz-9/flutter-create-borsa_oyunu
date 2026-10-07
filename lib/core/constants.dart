@@ -19,6 +19,12 @@ class GameConfig {
   /// Kayıtlı işlem geçmişi üst sınırı.
   static const int maxHistory = 200;
 
+  /// TL ⇄ USD çevirisinde alınan komisyon oranı (TL tutar üzerinden).
+  static const double exchangeCommission = 0.0005;
+
+  /// Dolar/TL kurunun alındığı varlık.
+  static const String usdTrySymbol = 'USDTRY';
+
   /// Aynı anda kurulabilecek aktif alarm sayısı.
   static const int maxActiveAlerts = 30;
 

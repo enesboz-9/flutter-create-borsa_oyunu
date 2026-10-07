@@ -103,7 +103,7 @@ class AssetDetailScreen extends StatelessWidget {
             children: [
               PriceText(
                 value: price,
-                text: '₺${fmtPrice(price)}',
+                text: fmtPriceIn(price, asset.currency),
                 style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800),
               ),
               if (asset.unit.isNotEmpty)
@@ -127,11 +127,11 @@ class AssetDetailScreen extends StatelessWidget {
           const SizedBox(height: 12),
           Row(
             children: [
-              Expanded(child: _MiniStat('Düşük', '₺${fmtPrice(low)}')),
+              Expanded(child: _MiniStat('Düşük', fmtPriceIn(low, asset.currency))),
               const SizedBox(width: 10),
-              Expanded(child: _MiniStat('Yüksek', '₺${fmtPrice(high)}')),
+              Expanded(child: _MiniStat('Yüksek', fmtPriceIn(high, asset.currency))),
               const SizedBox(width: 10),
-              Expanded(child: _MiniStat('Başlangıç', '₺${fmtPrice(first)}')),
+              Expanded(child: _MiniStat('Başlangıç', fmtPriceIn(first, asset.currency))),
             ],
           ),
           const SizedBox(height: 12),
@@ -144,6 +144,12 @@ class AssetDetailScreen extends StatelessWidget {
                 ),
                 const Divider(color: Colors.white10, height: 12),
                 KeyValueRow('Maks. kaldıraç', '${asset.category.maxLeverage}x'),
+                const Divider(color: Colors.white10, height: 12),
+                KeyValueRow('Para birimi', asset.currency.code),
+                if (asset.currency == Currency.usd) ...[
+                  const Divider(color: Colors.white10, height: 12),
+                  KeyValueRow('Dolar bakiyen', fmtUsd(game.usdCash)),
+                ],
               ],
             ),
           ),
@@ -169,13 +175,13 @@ class AssetDetailScreen extends StatelessWidget {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          '${p.side == Side.long ? 'LONG' : 'SHORT'} ${p.leverage}x  •  ${fmtQty(p.quantity)} adet  •  Ort. ₺${fmtPrice(p.avgCost)}',
+                          '${p.side == Side.long ? 'LONG' : 'SHORT'} ${p.leverage}x  •  ${fmtQty(p.quantity)} adet  •  Ort. ${fmtPriceIn(p.avgCost, asset.currency)}',
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                       ),
                       PnlPill(
                         value: p.pnlAt(price),
-                        text: fmtSigned(p.pnlAt(price)),
+                        text: fmtSignedIn(p.pnlAt(price), asset.currency),
                       ),
                     ],
                   ),

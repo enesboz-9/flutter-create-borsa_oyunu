@@ -19,6 +19,7 @@ class MarketScreen extends StatefulWidget {
 
 class _MarketScreenState extends State<MarketScreen> {
   AssetCategory? _filter;
+  String? _group; // Seçili kategorideki alt grup (örn. Bankacılık)
   String _query = '';
 
   void _open(Asset a) {
@@ -35,10 +36,11 @@ class _MarketScreenState extends State<MarketScreen> {
 
     final assets = kAssets.where((a) {
       final okCat = _filter == null || a.category == _filter;
+      final okGroup = _group == null || a.group == _group;
       final okQuery = q.isEmpty ||
           a.symbol.toLowerCase().contains(q) ||
           a.name.toLowerCase().contains(q);
-      return okCat && okQuery;
+      return okCat && okGroup && okQuery;
     }).toList();
 
     final movers = [...kAssets]..sort((a, b) => game
@@ -69,16 +71,29 @@ class _MarketScreenState extends State<MarketScreen> {
                               const Text('Toplam varlık',
                                   style: TextStyle(color: Colors.white70)),
                               const SizedBox(height: 2),
-                              Text(
-                                fmtTl(game.equity),
-                                style: const TextStyle(
-                                  fontSize: 26,
-                                  fontWeight: FontWeight.w800,
-                                  color: Colors.white,
-                                ),
+                              // TL toplam ve (dolar varsa) yanında $ karşılığı.
+                              Wrap(
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                spacing: 8,
+                                runSpacing: 4,
+                                children: [
+                                  Text(
+                                    fmtTl(game.equity),
+                                    style: const TextStyle(
+                                      fontSize: 26,
+                                      fontWeight: FontWeight.w800,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  if (game.hasUsd)
+                                    UsdChip(amount: game.usdHoldings),
+                                ],
                               ),
                               const SizedBox(height: 2),
-                              Text('Nakit: ${fmtTl(game.cash)}',
+                              Text(
+                                  game.usdCash > 0
+                                      ? 'Nakit: ${fmtTl(game.cash)} • ${fmtUsd(game.usdCash)}'
+                                      : 'Nakit: ${fmtTl(game.cash)}',
                                   style: const TextStyle(
                                       color: Colors.white70, fontSize: 12)),
                             ],
@@ -121,7 +136,7 @@ class _MarketScreenState extends State<MarketScreen> {
                 child: TextField(
                   onChanged: (v) => setState(() => _query = v),
                   decoration: InputDecoration(
-                    hintText: 'Hisse, coin, döviz ara...',
+                    hintText: 'Hisse, coin, döviz, maden ara...',
                     prefixIcon: const Icon(Icons.search, color: kMuted),
                     filled: true,
                     fillColor: kCard,
@@ -160,7 +175,32 @@ class _MarketScreenState extends State<MarketScreen> {
                   ],
                 ),
               ),
-              const SizedBox(height: 8),
+              if (_filter != null && groupsOf(_filter!).length > 1) ...[
+                const SizedBox(height: 4),
+                SizedBox(
+                  height: 40,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    children: [
+                      _groupChip(null, 'Hepsi'),
+                      for (final grp in groupsOf(_filter!))
+                        _groupChip(grp, grp),
+                    ],
+                  ),
+                ),
+              ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+                child: Text(
+                  [
+                    '${assets.length} varlık',
+                    if (_filter == AssetCategory.us)
+                      'dolar bakiyesiyle alınır • 1 USD = ₺${fmtPrice(game.usdTry)}',
+                  ].join(' • '),
+                  style: const TextStyle(color: kMuted, fontSize: 12),
+                ),
+              ),
             ],
           ),
         ),
@@ -207,7 +247,29 @@ class _MarketScreenState extends State<MarketScreen> {
         backgroundColor: kCard,
         side: BorderSide(color: selected ? color : Colors.white10),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        onSelected: (_) => setState(() => _filter = c),
+        onSelected: (_) => setState(() {
+          _filter = c;
+          _group = null;
+        }),
+      ),
+    );
+  }
+
+  Widget _groupChip(String? group, String label) {
+    final selected = _group == group;
+    final color = _filter?.color ?? kAccent;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: FilterChip(
+        showCheckmark: false,
+        visualDensity: VisualDensity.compact,
+        label: Text(label, style: const TextStyle(fontSize: 12)),
+        selected: selected,
+        selectedColor: color.withOpacity(0.30),
+        backgroundColor: kCard,
+        side: BorderSide(color: selected ? color : Colors.white10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        onSelected: (_) => setState(() => _group = group),
       ),
     );
   }
@@ -252,7 +314,7 @@ class _MoverCard extends StatelessWidget {
             const SizedBox(height: 4),
             PriceText(
               value: price,
-              text: '₺${fmtPrice(price)}',
+              text: fmtPriceIn(price, asset.currency),
               style: const TextStyle(fontSize: 13, color: kMuted),
             ),
             const Spacer(),
@@ -318,7 +380,7 @@ class _AssetRow extends StatelessWidget {
             children: [
               PriceText(
                 value: price,
-                text: '₺${fmtPrice(price)}',
+                text: fmtPriceIn(price, asset.currency),
                 style: const TextStyle(
                     fontWeight: FontWeight.w700, fontSize: 14),
               ),

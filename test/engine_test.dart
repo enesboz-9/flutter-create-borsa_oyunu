@@ -1,4 +1,6 @@
+import 'package:borsa_oyunu/core/market_hours.dart';
 import 'package:borsa_oyunu/data/assets_catalog.dart';
+import 'package:borsa_oyunu/models/asset.dart';
 import 'package:borsa_oyunu/models/position.dart';
 import 'package:borsa_oyunu/models/price_alert.dart';
 import 'package:borsa_oyunu/services/game_repository.dart';
@@ -355,5 +357,156 @@ void main() {
     prices.tick(89);
     expect(g.positions, isEmpty);
     expect(g.alerts.first.note, startsWith('Emir gerçekleşmedi'));
+  });
+
+  // ---- ABD hisseleri ve dolar bakiyesi ----
+  // FakePrices her sembol için aynı fiyatı verir: USDTRY kuru da 100'dür.
+
+  test('katalogda tekrar eden sembol yok, her kategori dolu', () {
+    final symbols = kAssets.map((a) => a.symbol).toList();
+    expect(symbols.toSet().length, symbols.length);
+    for (final c in AssetCategory.values) {
+      expect(kAssets.where((a) => a.category == c), isNotEmpty);
+    }
+    expect(assetBySymbol('USDTRY'), isNotNull);
+    expect(assetBySymbol('AAPL')!.currency, Currency.usd);
+    expect(assetBySymbol('THYAO')!.currency, Currency.tl);
+  });
+
+  test('ABD hissesi dolar bakiyesi olmadan alınamaz', () async {
+    final g = GameController(FakePrices(), MemRepo());
+    await g.init();
+    final aapl = assetBySymbol('AAPL')!;
+
+    final err = g.openPosition(
+        asset: aapl, side: Side.long, margin: 1000, leverage: 1);
+    expect(err, contains('dolar'));
+    expect(g.positions, isEmpty);
+    expect(g.cash, 1000000);
+  });
+
+  test('dolar alınca TL düşer, dolar artar ve toplam varlıkta görünür',
+      () async {
+    final g = GameController(FakePrices(), MemRepo());
+    await g.init();
+    expect(g.hasUsd, isFalse);
+
+    expect(g.buyUsd(1000), isNull);
+    // 1000 USD * 100 = 100.000 TL + %0,05 komisyon (50 TL).
+    expect(g.cash, closeTo(1000000 - 100050, 1e-6));
+    expect(g.usdCash, 1000);
+    expect(g.hasUsd, isTrue);
+    expect(g.usdHoldings, closeTo(1000, 1e-9));
+    // Toplam varlık (TL) doları güncel kurdan içerir; sadece komisyon kaybı var.
+    expect(g.equity, closeTo(1000000 - 50, 1e-6));
+  });
+
+  test('yetersiz TL ile dolar alınamaz, yetersiz dolar satılamaz', () async {
+    final g = GameController(FakePrices(), MemRepo());
+    await g.init();
+    expect(g.buyUsd(20000), isNotNull); // 2.000.000 TL gerekir
+    expect(g.usdCash, 0);
+    expect(g.sellUsd(1), isNotNull);
+    expect(g.buyUsd(0), isNotNull);
+  });
+
+  test('dolar satınca TL hesabına komisyon düşülerek geçer', () async {
+    final g = GameController(FakePrices(), MemRepo());
+    await g.init();
+    g.buyUsd(1000);
+    expect(g.sellUsd(500), isNull);
+    expect(g.usdCash, 500);
+    // 500 * 100 = 50.000 TL, komisyon 25 TL.
+    expect(g.cash, closeTo(1000000 - 100050 + 50000 - 25, 1e-6));
+  });
+
+  test('ABD hissesi dolar bakiyesinden alınır, TL nakde dokunulmaz', () async {
+    final g = GameController(FakePrices(), MemRepo());
+    await g.init();
+    g.buyUsd(1000);
+    final tlBefore = g.cash;
+    final equityBefore = g.equity;
+    final aapl = assetBySymbol('AAPL')!;
+
+    expect(
+        g.openPosition(asset: aapl, side: Side.long, margin: 500, leverage: 2),
+        isNull);
+    // Komisyon: 500 * 2 * %0,1 = 1 USD.
+    expect(g.usdCash, closeTo(1000 - 500 - 1, 1e-9));
+    expect(g.cash, tlBefore);
+    expect(g.positions.single.margin, 500);
+    // Toplam varlık yalnızca 1 USD (= 100 TL) komisyon kadar düşer.
+    expect(g.equity, closeTo(equityBefore - 100, 1e-6));
+    expect(g.usedMarginUsd, 500);
+  });
+
+  test('ABD hissesi kapanınca teminat ve kâr dolar bakiyesine döner',
+      () async {
+    final prices = FakePrices();
+    final g = GameController(prices, MemRepo());
+    await g.init();
+    g.buyUsd(1000);
+    final aapl = assetBySymbol('AAPL')!;
+    g.openPosition(asset: aapl, side: Side.long, margin: 500, leverage: 1);
+    final cashAfterOpen = g.usdCash; // 1000 - 500 - 0,5
+
+    g.closePosition(g.positions.single.id);
+    // Aynı fiyattan kapanış: teminat geri gelir, kapanış komisyonu 0,5 USD.
+    expect(g.usdCash, closeTo(cashAfterOpen + 500 - 0.5, 1e-9));
+    expect(g.cash, closeTo(1000000 - 100050, 1e-6));
+    expect(g.history.single.symbol, 'AAPL');
+  });
+
+  test('otomatik AL emri ABD hissesinde dolar bakiyesini kullanır', () async {
+    final prices = FakePrices();
+    final g = GameController(prices, MemRepo());
+    await g.init();
+    g.buyUsd(1000);
+    final aapl = assetBySymbol('AAPL')!;
+
+    expect(
+        g.addAlert(
+          asset: aapl,
+          targetPrice: 90,
+          intent: AlertIntent.buy,
+          auto: true,
+          orderMargin: 400,
+        ),
+        isNull);
+    prices.tick(89);
+    expect(g.positions.single.symbol, 'AAPL');
+    expect(g.usdCash, closeTo(1000 - 400 - 0.4, 1e-9));
+    expect(g.alerts.first.note, startsWith('Alındı'));
+  });
+
+  test('dolarsız hesapta ABD hissesi otomatik AL emri gerçekleşmez', () async {
+    final prices = FakePrices();
+    final g = GameController(prices, MemRepo());
+    await g.init();
+    final aapl = assetBySymbol('AAPL')!;
+
+    g.addAlert(
+      asset: aapl,
+      targetPrice: 90,
+      intent: AlertIntent.buy,
+      auto: true,
+      orderMargin: 400,
+    );
+    prices.tick(89);
+    expect(g.positions, isEmpty);
+    expect(g.alerts.first.note, startsWith('Emir gerçekleşmedi'));
+  });
+
+  test('ABD piyasası New York saatine göre (yaz/kış) açılır', () {
+    final aapl = assetBySymbol('AAPL')!;
+    // Perşembe 8 Ekim 2026 (yaz saati): 09:30 NY = 13:30 UTC = 16:30 TR.
+    expect(isMarketOpen(aapl, now: DateTime.utc(2026, 10, 8, 13, 29)), isFalse);
+    expect(isMarketOpen(aapl, now: DateTime.utc(2026, 10, 8, 13, 30)), isTrue);
+    expect(isMarketOpen(aapl, now: DateTime.utc(2026, 10, 8, 20, 0)), isFalse);
+    // Çarşamba 9 Aralık 2026 (kış saati): 09:30 NY = 14:30 UTC = 17:30 TR.
+    expect(isMarketOpen(aapl, now: DateTime.utc(2026, 12, 9, 14, 29)), isFalse);
+    expect(isMarketOpen(aapl, now: DateTime.utc(2026, 12, 9, 14, 30)), isTrue);
+    // Cumartesi kapalı.
+    expect(isMarketOpen(aapl, now: DateTime.utc(2026, 10, 10, 15, 0)), isFalse);
   });
 }

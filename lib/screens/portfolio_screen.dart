@@ -6,10 +6,14 @@ import 'package:provider/provider.dart';
 
 import '../core/constants.dart';
 import '../core/format.dart';
+import '../models/asset.dart';
 import '../models/position.dart';
+import '../models/price_alert.dart';
 import '../state/game_controller.dart';
 import '../widgets/common.dart';
+import 'alert_sheet.dart';
 import 'close_sheet.dart';
+import 'exchange_sheet.dart';
 
 const List<Color> _palette = [
   Color(0xFF7C6CFF),
@@ -62,28 +66,53 @@ class PortfolioScreen extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 4),
-              Text(
-                fmtTl(g.equity),
-                style: const TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.white,
-                ),
+              // TL toplam (dolar varlığı güncel kurdan dahil) ve yanında $ karşılığı.
+              Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 10,
+                runSpacing: 6,
+                children: [
+                  Text(
+                    fmtTl(g.equity),
+                    style: const TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                    ),
+                  ),
+                  if (g.hasUsd) UsdChip(amount: g.usdHoldings),
+                ],
               ),
               const SizedBox(height: 16),
               Row(
                 children: [
                   _heroStat('Nakit', fmtTl(g.cash)),
+                  if (g.hasUsd) _heroStat('Dolar', fmtUsd(g.usdCash)),
                   _heroStat('Teminat', fmtTl(g.usedMargin)),
                   _heroStat('Açık K/Z', fmtSigned(g.unrealizedPnl)),
                 ],
               ),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white54),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  icon: const Icon(Icons.currency_exchange, size: 18),
+                  label: const Text('Dolar Al / Sat'),
+                  onPressed: () => showExchangeSheet(context),
+                ),
+              ),
             ],
           ),
         ),
-        if (positions.isNotEmpty) ...[
+        if (positions.isNotEmpty || g.usdCash > 0) ...[
           const SizedBox(height: 16),
-          _AllocationCard(cash: g.cash, positions: positions),
+          _AllocationCard(game: g, positions: positions),
         ],
         const SizedBox(height: 20),
         Text('Açık pozisyonlar (${positions.length})',
@@ -134,19 +163,27 @@ class PortfolioScreen extends StatelessWidget {
 }
 
 class _AllocationCard extends StatelessWidget {
-  const _AllocationCard({required this.cash, required this.positions});
+  const _AllocationCard({required this.game, required this.positions});
 
-  final double cash;
+  final GameController game;
   final List<Position> positions;
 
   @override
   Widget build(BuildContext context) {
+    // Tüm değerler TL karşılığıyla karşılaştırılır.
     final entries = <({String label, double value, Color color})>[
-      (label: 'Nakit', value: cash, color: const Color(0xFF5B6478)),
+      (label: 'Nakit', value: game.cash, color: const Color(0xFF5B6478)),
+      if (game.usdCash > 0)
+        (
+          label: 'Dolar',
+          value: game.toTl(Currency.usd, game.usdCash),
+          color: const Color(0xFF3FA66B),
+        ),
       for (var i = 0; i < positions.length; i++)
         (
           label: positions[i].symbol,
-          value: positions[i].margin,
+          value: game.toTl(
+              game.currencyOf(positions[i].symbol), positions[i].margin),
           color: _palette[i % _palette.length],
         ),
     ];
@@ -227,6 +264,10 @@ class _PositionCard extends StatelessWidget {
     final price = g.priceOf(p.symbol);
     final pnl = p.pnlAt(price);
     final pnlPct = p.margin == 0 ? 0.0 : pnl / p.margin * 100;
+    final asset = g.assetOf(p.symbol);
+    final cur = asset.currency;
+    final alerts =
+        g.alertsFor(p.symbol).where((a) => a.isActive).toList();
     final isLong = p.side == Side.long;
     final sideColor = isLong ? kGreen : kRed;
 
@@ -280,7 +321,7 @@ class _PositionCard extends StatelessWidget {
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Text(fmtSigned(pnl),
+                            Text(fmtSignedIn(pnl, cur),
                                 style: TextStyle(
                                     color: pnlColor(pnl),
                                     fontWeight: FontWeight.w800,
@@ -295,12 +336,15 @@ class _PositionCard extends StatelessWidget {
                     const SizedBox(height: 10),
                     KeyValueRow('Adet', fmtQty(p.quantity)),
                     KeyValueRow('Ort. maliyet (komisyon dahil)',
-                        '₺${fmtPrice(p.avgCost)}'),
-                    KeyValueRow('Güncel', '₺${fmtPrice(price)}'),
-                    KeyValueRow('Değer', fmtTl(price * p.quantity)),
-                    KeyValueRow('Teminat', fmtTl(p.margin)),
+                        fmtPriceIn(p.avgCost, cur)),
+                    KeyValueRow('Güncel', fmtPriceIn(price, cur)),
+                    KeyValueRow('Değer', fmtMoney(price * p.quantity, cur)),
+                    if (cur == Currency.usd)
+                      KeyValueRow('Değer (TL karşılığı)',
+                          fmtTl(g.toTl(cur, price * p.quantity))),
+                    KeyValueRow('Teminat', fmtMoney(p.margin, cur)),
                     KeyValueRow(
-                        'Likidasyon', '₺${fmtPrice(p.liquidationPrice)}'),
+                        'Likidasyon', fmtPriceIn(p.liquidationPrice, cur)),
                     const SizedBox(height: 8),
                     Row(
                       children: [
@@ -324,24 +368,121 @@ class _PositionCard extends StatelessWidget {
                         color: riskColor,
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Colors.white24),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
+                    if (alerts.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            for (final a in alerts)
+                              _AlertChip(
+                                alert: a,
+                                currency: cur,
+                                onTap: () => showAlertSheet(context, asset),
+                              ),
+                          ],
                         ),
-                        icon: const Icon(Icons.close, size: 18),
-                        label: Text(isLong ? 'Sat' : 'Kapat'),
-                        // Adet ya da yüzde girerek kısmen de satabilirsin.
-                        onPressed: () => showCloseSheet(context, p.id),
                       ),
+                    ],
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: Colors.white24),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12)),
+                            ),
+                            icon: Badge(
+                              isLabelVisible: alerts.isNotEmpty,
+                              label: Text('${alerts.length}'),
+                              child: const Icon(Icons.notifications_active_outlined,
+                                  size: 18),
+                            ),
+                            label: const Text('Alarm / Emir'),
+                            // Şu fiyattan otomatik al / sat ya da haber ver.
+                            onPressed: () => showAlertSheet(
+                              context,
+                              asset,
+                              initialMode: isLong
+                                  ? AlertSheetMode.sell
+                                  : AlertSheetMode.notify,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: Colors.white24),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12)),
+                            ),
+                            icon: const Icon(Icons.close, size: 18),
+                            label: Text(isLong ? 'Sat' : 'Kapat'),
+                            // Adet ya da yüzde girerek kısmen de satabilirsin.
+                            onPressed: () => showCloseSheet(context, p.id),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Pozisyon kartında gösterilen küçük aktif alarm / emir rozeti.
+class _AlertChip extends StatelessWidget {
+  const _AlertChip({
+    required this.alert,
+    required this.currency,
+    required this.onTap,
+  });
+
+  final PriceAlert alert;
+  final Currency currency;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (alert.intent) {
+      AlertIntent.buy => kGreen,
+      AlertIntent.sell => kRed,
+      AlertIntent.none => kAccent,
+    };
+    final kind = alert.intent == AlertIntent.none
+        ? 'Alarm'
+        : (alert.auto
+            ? 'Oto ${alert.intent.label}'
+            : alert.intent.label);
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.16),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(alert.auto ? Icons.bolt : Icons.notifications_none,
+                size: 13, color: color),
+            const SizedBox(width: 4),
+            Text(
+              '$kind ${fmtPriceIn(alert.targetPrice, currency)}',
+              style: TextStyle(
+                  color: color, fontSize: 11, fontWeight: FontWeight.w700),
             ),
           ],
         ),

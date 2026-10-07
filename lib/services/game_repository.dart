@@ -13,9 +13,13 @@ class GameSnapshot {
     required this.positions,
     required this.history,
     this.alerts = const [],
+    this.usdCash = 0,
   });
 
   final double cash;
+
+  /// Dolar bakiyesi (ABD hisseleri bununla alınır).
+  final double usdCash;
   final List<Position> positions;
   final List<TradeRecord> history;
   final List<PriceAlert> alerts;
@@ -43,6 +47,8 @@ class LocalGameRepository implements GameRepository {
       final m = jsonDecode(raw) as Map<String, dynamic>;
       return GameSnapshot(
         cash: (m['cash'] as num).toDouble(),
+        // Eski kayıtlarda 'usdCash' yoktur.
+        usdCash: (m['usdCash'] as num?)?.toDouble() ?? 0,
         positions: (m['positions'] as List)
             .map((e) => Position.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -69,6 +75,7 @@ class LocalGameRepository implements GameRepository {
       _key,
       jsonEncode({
         'cash': s.cash,
+        'usdCash': s.usdCash,
         'positions': s.positions.map((e) => e.toJson()).toList(),
         'history': history.map((e) => e.toJson()).toList(),
         'alerts': s.alerts.map((e) => e.toJson()).toList(),

@@ -8,6 +8,7 @@ import '../models/asset.dart';
 import '../models/position.dart';
 import '../state/game_controller.dart';
 import '../widgets/common.dart';
+import 'exchange_sheet.dart';
 
 /// İşlem (AL/SAT) sayfasını açar. Alarm bildiriminden de kullanılır.
 void showTradeSheet(BuildContext context, Asset asset, Side side) {
@@ -52,7 +53,7 @@ class _TradeSheetState extends State<TradeSheet> {
   /// Komisyon dahil, eldeki nakitle açılabilecek en yüksek teminat.
   double _maxMargin(GameController g) {
     final rate = widget.asset.category.commissionRate;
-    final raw = g.cash / (1 + _leverage * rate);
+    final raw = g.cashOf(widget.asset.currency) / (1 + _leverage * rate);
     return (raw * 100).floorToDouble() / 100;
   }
 
@@ -90,6 +91,7 @@ class _TradeSheetState extends State<TradeSheet> {
   Widget build(BuildContext context) {
     final g = context.watch<GameController>();
     final asset = widget.asset;
+    final cur = asset.currency;
     final isLong = widget.side == Side.long;
     final color = isLong ? kGreen : kRed;
     final price = g.priceOf(asset.symbol);
@@ -140,7 +142,7 @@ class _TradeSheetState extends State<TradeSheet> {
                         ),
                       ),
                       Text(
-                        'Güncel fiyat: ₺${fmtPrice(price)}',
+                        'Güncel fiyat: ${fmtPriceIn(price, cur)}',
                         style: const TextStyle(color: kMuted, fontSize: 12),
                       ),
                     ],
@@ -152,12 +154,34 @@ class _TradeSheetState extends State<TradeSheet> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Kullanılabilir nakit',
-                    style: TextStyle(color: kMuted)),
-                Text(fmtTl(g.cash),
+                Text(
+                    cur == Currency.usd
+                        ? 'Kullanılabilir dolar'
+                        : 'Kullanılabilir nakit',
+                    style: const TextStyle(color: kMuted)),
+                Text(fmtMoney(g.cashOf(cur), cur),
                     style: const TextStyle(fontWeight: FontWeight.w700)),
               ],
             ),
+            if (cur == Currency.usd)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'ABD hisseleri dolarla alınır • 1 USD = ₺${fmtPrice(g.usdTry)}',
+                        style: const TextStyle(color: kMuted, fontSize: 12),
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => showExchangeSheet(context),
+                      icon: const Icon(Icons.currency_exchange, size: 16),
+                      label: const Text('Dolar al'),
+                    ),
+                  ],
+                ),
+              ),
             const SizedBox(height: 10),
             TextField(
               controller: _marginCtrl,
@@ -169,7 +193,7 @@ class _TradeSheetState extends State<TradeSheet> {
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
               decoration: InputDecoration(
                 labelText: 'Teminat',
-                prefixText: '₺ ',
+                prefixText: '${cur.symbol} ',
                 filled: true,
                 fillColor: Colors.white10,
                 border: OutlineInputBorder(
@@ -257,12 +281,13 @@ class _TradeSheetState extends State<TradeSheet> {
               padding: const EdgeInsets.all(14),
               child: Column(
                 children: [
-                  KeyValueRow('Pozisyon büyüklüğü', fmtTl(notional)),
-                  KeyValueRow('Komisyon', fmtTl(commission)),
-                  KeyValueRow('Toplam gereken', fmtTl(_margin + commission),
+                  KeyValueRow('Pozisyon büyüklüğü', fmtMoney(notional, cur)),
+                  KeyValueRow('Komisyon', fmtMoney(commission, cur)),
+                  KeyValueRow(
+                      'Toplam gereken', fmtMoney(_margin + commission, cur),
                       bold: true),
                   const Divider(color: Colors.white10, height: 14),
-                  KeyValueRow('Likidasyon fiyatı', '₺${fmtPrice(liq)}',
+                  KeyValueRow('Likidasyon fiyatı', fmtPriceIn(liq, cur),
                       valueColor: risk),
                   KeyValueRow('Likidasyona mesafe',
                       '%${liqDistance.toStringAsFixed(1).replaceAll('.', ',')}',

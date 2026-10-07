@@ -1,4 +1,5 @@
 import '../core/format.dart';
+import 'asset.dart';
 import 'position.dart';
 
 /// Alarmın hangi yöne tetikleneceği (kurulduğu andaki fiyata göre belirlenir).
@@ -74,11 +75,11 @@ class PriceAlert {
       ? price >= targetPrice
       : price <= targetPrice;
 
-  /// Kısa emir özeti (alarm satırında gösterilir).
-  String get orderSummary {
+  /// Kısa emir özeti (alarm satırında gösterilir). [currency]: varlığın para birimi.
+  String orderSummary([Currency currency = Currency.tl]) {
     if (!auto) return '';
     if (intent == AlertIntent.buy) {
-      return '₺${fmtPrice(orderMargin ?? 0)} teminatla al • ${orderLeverage}x';
+      return '${currency.symbol}${fmtPrice(orderMargin ?? 0)} teminatla al • ${orderLeverage}x';
     }
     if (orderPercent != null) {
       return 'Eldekinin %${orderPercent!.toStringAsFixed(0)}\'ini sat';

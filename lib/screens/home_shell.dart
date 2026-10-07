@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../core/constants.dart';
 import '../core/format.dart';
+import '../models/asset.dart';
 import '../models/position.dart';
 import '../models/price_alert.dart';
 import '../state/game_controller.dart';
@@ -55,14 +56,15 @@ class _HomeShellState extends State<HomeShell> {
     final asset = g.findAsset(a.symbol);
     final side = a.intent.side;
     final reached = a.triggeredPrice ?? a.targetPrice;
+    final cur = asset?.currency ?? Currency.tl;
     final messenger = ScaffoldMessenger.of(context);
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
       SnackBar(
         duration: const Duration(seconds: 10),
         content: Text(a.auto
-            ? 'Otomatik emir • ${a.symbol} ₺${fmtPrice(a.targetPrice)}: ${a.note ?? ''}'
-            : 'Alarm: ${a.symbol} ₺${fmtPrice(a.targetPrice)} hedefine ulaştı (şu an ₺${fmtPrice(reached)}).'),
+            ? 'Otomatik emir • ${a.symbol} ${fmtPriceIn(a.targetPrice, cur)}: ${a.note ?? ''}'
+            : 'Alarm: ${a.symbol} ${fmtPriceIn(a.targetPrice, cur)} hedefine ulaştı (şu an ${fmtPriceIn(reached, cur)}).'),
         action: (a.auto || asset == null || side == null)
             ? null
             : SnackBarAction(
@@ -86,7 +88,7 @@ class _HomeShellState extends State<HomeShell> {
       builder: (ctx) => AlertDialog(
         title: const Text('Oyunu sıfırla'),
         content: const Text(
-            'Tüm pozisyonlar ve geçmiş silinir, bakiyen 1.000.000 ₺ olur.'),
+            'Tüm pozisyonlar, alarmlar ve geçmiş silinir, dolar bakiyen sıfırlanır ve TL bakiyen 1.000.000 ₺ olur.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),

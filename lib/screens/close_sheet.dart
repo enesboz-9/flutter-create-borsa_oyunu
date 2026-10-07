@@ -93,6 +93,7 @@ class _CloseSheetState extends State<CloseSheet> {
     }
 
     final asset = g.assetOf(p.symbol);
+    final cur = asset.currency;
     final price = g.priceOf(p.symbol);
     _shownPrice = price;
     final isLong = p.side == Side.long;
@@ -134,7 +135,7 @@ class _CloseSheetState extends State<CloseSheet> {
                             fontWeight: FontWeight.w800,
                             color: color),
                       ),
-                      Text('Güncel fiyat: ₺${fmtPrice(price)}',
+                      Text('Güncel fiyat: ${fmtPriceIn(price, cur)}',
                           style:
                               const TextStyle(color: kMuted, fontSize: 12)),
                     ],
@@ -150,7 +151,7 @@ class _CloseSheetState extends State<CloseSheet> {
                 children: [
                   KeyValueRow('Eldeki adet', fmtQty(p.quantity)),
                   KeyValueRow(
-                      'Ort. maliyet (komisyon dahil)', '₺${fmtPrice(p.avgCost)}'),
+                      'Ort. maliyet (komisyon dahil)', fmtPriceIn(p.avgCost, cur)),
                 ],
               ),
             ),
@@ -206,14 +207,14 @@ class _CloseSheetState extends State<CloseSheet> {
               padding: const EdgeInsets.all(14),
               child: Column(
                 children: [
-                  KeyValueRow('Satış fiyatı', '₺${fmtPrice(price)}'),
-                  KeyValueRow('Satış tutarı', fmtTl(price * shown)),
-                  KeyValueRow('Satış komisyonu', fmtTl(closeComm)),
+                  KeyValueRow('Satış fiyatı', fmtPriceIn(price, cur)),
+                  KeyValueRow('Satış tutarı', fmtMoney(price * shown, cur)),
+                  KeyValueRow('Satış komisyonu', fmtMoney(closeComm, cur)),
                   KeyValueRow('Net K/Z (açılış komisyonu dahil)',
-                      fmtSigned(net),
+                      fmtSignedIn(net, cur),
                       valueColor: pnlColor(net)),
                   const Divider(color: Colors.white10, height: 14),
-                  KeyValueRow('Hesabına geçecek', fmtTl(proceeds), bold: true),
+                  KeyValueRow('Hesabına geçecek', fmtMoney(proceeds, cur), bold: true),
                   KeyValueRow('Kalan adet', fmtQty(remaining)),
                 ],
               ),

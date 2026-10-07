@@ -48,6 +48,33 @@ class AppCard extends StatelessWidget {
   }
 }
 
+/// Toplam varlığın yanında gösterilen dolar rozeti (örn. $1.234,56).
+class UsdChip extends StatelessWidget {
+  const UsdChip({super.key, required this.amount});
+
+  final double amount;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black26,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Text(
+        fmtUsd(amount),
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w800,
+          fontSize: 14,
+        ),
+      ),
+    );
+  }
+}
+
 /// Yüzde ya da tutar için renkli küçük hap rozet.
 class PnlPill extends StatelessWidget {
   const PnlPill({super.key, required this.value, required this.text, this.small = false});

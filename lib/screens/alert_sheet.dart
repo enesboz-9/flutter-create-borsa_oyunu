@@ -15,25 +15,35 @@ const LinearGradient _kAlertGradient = LinearGradient(
   colors: [Color(0xFF8E7DFF), kAccent],
 );
 
-void showAlertSheet(BuildContext context, Asset asset) {
+void showAlertSheet(
+  BuildContext context,
+  Asset asset, {
+  AlertSheetMode initialMode = AlertSheetMode.notify,
+}) {
   showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-      child: AlertSheet(asset: asset),
+      child: AlertSheet(asset: asset, initialMode: initialMode),
     ),
   );
 }
 
-enum _Mode { notify, buy, sell }
+/// Alarm sayfasının açılışta seçili olan modu.
+enum AlertSheetMode { notify, buy, sell }
 
 /// Bir varlık için fiyat alarmı / otomatik emir kurma ve yönetme.
 class AlertSheet extends StatefulWidget {
-  const AlertSheet({super.key, required this.asset});
+  const AlertSheet({
+    super.key,
+    required this.asset,
+    this.initialMode = AlertSheetMode.notify,
+  });
 
   final Asset asset;
+  final AlertSheetMode initialMode;
 
   @override
   State<AlertSheet> createState() => _AlertSheetState();
@@ -44,7 +54,7 @@ class _AlertSheetState extends State<AlertSheet> {
   final _marginCtrl = TextEditingController();
   final _qtyCtrl = TextEditingController();
 
-  _Mode _mode = _Mode.notify;
+  late AlertSheetMode _mode = widget.initialMode;
   int _leverage = 1;
   bool _sellByPercent = true;
   int _sellPercent = 100;
@@ -73,7 +83,8 @@ class _AlertSheetState extends State<AlertSheet> {
 
   void _setMarginPct(GameController g, int pct) {
     final rate = widget.asset.category.commissionRate;
-    final maxMargin = g.cash / (1 + _leverage * rate);
+    final maxMargin =
+        g.cashOf(widget.asset.currency) / (1 + _leverage * rate);
     final v = (maxMargin * pct / 100 * 100).floorToDouble() / 100;
     setState(() {
       _marginCtrl.text = v.toStringAsFixed(2);
@@ -85,9 +96,9 @@ class _AlertSheetState extends State<AlertSheet> {
     final g = context.read<GameController>();
     final String? err;
     switch (_mode) {
-      case _Mode.notify:
+      case AlertSheetMode.notify:
         err = g.addAlert(asset: widget.asset, targetPrice: _target);
-      case _Mode.buy:
+      case AlertSheetMode.buy:
         err = g.addAlert(
           asset: widget.asset,
           targetPrice: _target,
@@ -96,7 +107,7 @@ class _AlertSheetState extends State<AlertSheet> {
           orderMargin: _num(_marginCtrl),
           orderLeverage: _leverage,
         );
-      case _Mode.sell:
+      case AlertSheetMode.sell:
         err = g.addAlert(
           asset: widget.asset,
           targetPrice: _target,
@@ -112,7 +123,7 @@ class _AlertSheetState extends State<AlertSheet> {
         _targetCtrl.clear();
         _marginCtrl.clear();
         _qtyCtrl.clear();
-        _mode = _Mode.notify;
+        _mode = AlertSheetMode.notify;
         _leverage = 1;
       }
     });
@@ -125,7 +136,7 @@ class _AlertSheetState extends State<AlertSheet> {
     }
     final pct = (t - price) / price * 100;
     final dir = t > price ? 'yukarı çıkınca' : 'aşağı inince';
-    return 'Fiyat ₺${fmtPrice(t)} seviyesine $dir tetiklenir (${fmtPct(pct)}).';
+    return 'Fiyat ${fmtPriceIn(t, widget.asset.currency)} seviyesine $dir tetiklenir (${fmtPct(pct)}).';
   }
 
   InputDecoration _dec(String label, {String? prefix}) => InputDecoration(
@@ -161,7 +172,8 @@ class _AlertSheetState extends State<AlertSheet> {
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           inputFormatters: [_numFormatter],
           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-          decoration: _dec('Alınacak teminat', prefix: '₺ '),
+          decoration: _dec('Alınacak teminat',
+              prefix: '${asset.currency.symbol} '),
           onChanged: (_) => setState(() => _error = null),
         ),
         const SizedBox(height: 8),
@@ -212,15 +224,17 @@ class _AlertSheetState extends State<AlertSheet> {
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Text(
-              'Tetiklenince ≈ ${fmtQty(qty)} adet alınır • komisyon ${fmtTl(comm)}',
+              'Tetiklenince ≈ ${fmtQty(qty)} adet alınır • komisyon ${fmtMoney(comm, asset.currency)}',
               style: const TextStyle(color: kMuted, fontSize: 12),
             ),
           ),
-        const Padding(
-          padding: EdgeInsets.only(top: 6),
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
           child: Text(
-            'Tetiklenme anında nakdin yetersizse emir gerçekleşmez.',
-            style: TextStyle(color: kMuted, fontSize: 12),
+            asset.currency == Currency.usd
+                ? 'Tetiklenme anında dolar bakiyen yetersizse emir gerçekleşmez. ABD hisseleri için önce dolar almış olmalısın.'
+                : 'Tetiklenme anında nakdin yetersizse emir gerçekleşmez.',
+            style: const TextStyle(color: kMuted, fontSize: 12),
           ),
         ),
       ],
@@ -308,9 +322,9 @@ class _AlertSheetState extends State<AlertSheet> {
     final price = g.priceOf(asset.symbol);
     final mine = g.alertsFor(asset.symbol);
     final label = switch (_mode) {
-      _Mode.notify => 'Alarm kur',
-      _Mode.buy => 'Otomatik AL emri kur',
-      _Mode.sell => 'Otomatik SAT emri kur',
+      AlertSheetMode.notify => 'Alarm kur',
+      AlertSheetMode.buy => 'Otomatik AL emri kur',
+      AlertSheetMode.sell => 'Otomatik SAT emri kur',
     };
 
     return SafeArea(
@@ -340,7 +354,7 @@ class _AlertSheetState extends State<AlertSheet> {
                       Text('Alarm ve emir • ${asset.symbol}',
                           style: const TextStyle(
                               fontSize: 18, fontWeight: FontWeight.w800)),
-                      Text('Güncel fiyat: ₺${fmtPrice(price)}',
+                      Text('Güncel fiyat: ${fmtPriceIn(price, asset.currency)}',
                           style:
                               const TextStyle(color: kMuted, fontSize: 12)),
                     ],
@@ -354,21 +368,21 @@ class _AlertSheetState extends State<AlertSheet> {
               children: [
                 ChoiceChip(
                   label: const Text('Sadece haber ver'),
-                  selected: _mode == _Mode.notify,
+                  selected: _mode == AlertSheetMode.notify,
                   showCheckmark: false,
-                  onSelected: (_) => setState(() => _mode = _Mode.notify),
+                  onSelected: (_) => setState(() => _mode = AlertSheetMode.notify),
                 ),
                 ChoiceChip(
                   label: const Text('Otomatik AL'),
-                  selected: _mode == _Mode.buy,
+                  selected: _mode == AlertSheetMode.buy,
                   showCheckmark: false,
-                  onSelected: (_) => setState(() => _mode = _Mode.buy),
+                  onSelected: (_) => setState(() => _mode = AlertSheetMode.buy),
                 ),
                 ChoiceChip(
                   label: const Text('Otomatik SAT'),
-                  selected: _mode == _Mode.sell,
+                  selected: _mode == AlertSheetMode.sell,
                   showCheckmark: false,
-                  onSelected: (_) => setState(() => _mode = _Mode.sell),
+                  onSelected: (_) => setState(() => _mode = AlertSheetMode.sell),
                 ),
               ],
             ),
@@ -379,7 +393,7 @@ class _AlertSheetState extends State<AlertSheet> {
                   const TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [_numFormatter],
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-              decoration: _dec('Hedef fiyat', prefix: '₺ '),
+              decoration: _dec('Hedef fiyat', prefix: '${asset.currency.symbol} '),
               onChanged: (_) => setState(() => _error = null),
             ),
             const SizedBox(height: 6),
@@ -398,8 +412,8 @@ class _AlertSheetState extends State<AlertSheet> {
                   ),
               ],
             ),
-            if (_mode == _Mode.buy) _buyConfig(g),
-            if (_mode == _Mode.sell) _sellConfig(g),
+            if (_mode == AlertSheetMode.buy) _buyConfig(g),
+            if (_mode == AlertSheetMode.sell) _sellConfig(g),
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 10),
@@ -410,13 +424,13 @@ class _AlertSheetState extends State<AlertSheet> {
             const SizedBox(height: 16),
             GradientButton(
               label: label,
-              icon: _mode == _Mode.notify
+              icon: _mode == AlertSheetMode.notify
                   ? Icons.add_alert_outlined
                   : Icons.bolt,
               gradient: switch (_mode) {
-                _Mode.notify => _kAlertGradient,
-                _Mode.buy => kBuyGradient,
-                _Mode.sell => kSellGradient,
+                AlertSheetMode.notify => _kAlertGradient,
+                AlertSheetMode.buy => kBuyGradient,
+                AlertSheetMode.sell => kSellGradient,
               },
               onPressed: _submit,
             ),

@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 
 import '../core/constants.dart';
 import '../core/format.dart';
+import '../data/assets_catalog.dart';
+import '../models/asset.dart';
 import '../models/position.dart';
 import '../models/trade_record.dart';
 import '../state/game_controller.dart';
@@ -31,7 +33,14 @@ class HistoryScreen extends StatelessWidget {
     final wins = history.where((r) => r.netPnl > 0).length;
     final liquidations =
         history.where((r) => r.reason == CloseReason.liquidation).length;
-    final totalNet = history.fold<double>(0, (s, r) => s + r.netPnl);
+    Currency curOf(TradeRecord r) =>
+        assetBySymbol(r.symbol)?.currency ?? Currency.tl;
+    final totalNetTl = history
+        .where((r) => curOf(r) == Currency.tl)
+        .fold<double>(0, (s, r) => s + r.netPnl);
+    final usdRecords =
+        history.where((r) => curOf(r) == Currency.usd).toList();
+    final totalNetUsd = usdRecords.fold<double>(0, (s, r) => s + r.netPnl);
     final winRate = wins / history.length * 100;
 
     return ListView(
@@ -53,18 +62,36 @@ class HistoryScreen extends StatelessWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('Toplam net K/Z',
+                  const Text('Toplam net K/Z (TL)',
                       style: TextStyle(color: kMuted)),
                   Text(
-                    fmtSigned(totalNet),
+                    fmtSigned(totalNetTl),
                     style: TextStyle(
-                      color: pnlColor(totalNet),
+                      color: pnlColor(totalNetTl),
                       fontWeight: FontWeight.w800,
                       fontSize: 18,
                     ),
                   ),
                 ],
               ),
+              if (usdRecords.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Toplam net K/Z (USD)',
+                        style: TextStyle(color: kMuted)),
+                    Text(
+                      fmtSignedIn(totalNetUsd, Currency.usd),
+                      style: TextStyle(
+                        color: pnlColor(totalNetUsd),
+                        fontWeight: FontWeight.w800,
+                        fontSize: 18,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
@@ -99,6 +126,7 @@ class _RecordCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final r = record;
+    final cur = assetBySymbol(r.symbol)?.currency ?? Currency.tl;
     final isLong = r.side == Side.long;
     final liquidated = r.reason == CloseReason.liquidation;
     final sideColor = isLong ? kGreen : kRed;
@@ -153,7 +181,7 @@ class _RecordCard extends StatelessWidget {
                 ),
               ),
               Text(
-                fmtSigned(r.netPnl),
+                fmtSignedIn(r.netPnl, cur),
                 style: TextStyle(
                   color: pnlColor(r.netPnl),
                   fontWeight: FontWeight.w800,
@@ -167,11 +195,11 @@ class _RecordCard extends StatelessWidget {
           const SizedBox(height: 6),
           if (r.quantity > 0) KeyValueRow('Adet', fmtQty(r.quantity)),
           KeyValueRow('Giriş → Çıkış',
-              '₺${fmtPrice(r.entryPrice)} → ₺${fmtPrice(r.exitPrice)}'),
-          KeyValueRow('Teminat', fmtTl(r.margin)),
-          KeyValueRow('Brüt K/Z', fmtSigned(r.grossPnl),
+              '${fmtPriceIn(r.entryPrice, cur)} → ${fmtPriceIn(r.exitPrice, cur)}'),
+          KeyValueRow('Teminat', fmtMoney(r.margin, cur)),
+          KeyValueRow('Brüt K/Z', fmtSignedIn(r.grossPnl, cur),
               valueColor: pnlColor(r.grossPnl)),
-          KeyValueRow('Komisyon', fmtTl(r.commission)),
+          KeyValueRow('Komisyon', fmtMoney(r.commission, cur)),
         ],
       ),
     );
