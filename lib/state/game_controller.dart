@@ -79,6 +79,12 @@ class GameController extends ChangeNotifier {
   double priceOf(String symbol) => _prices.priceOf(symbol);
   double changePercent(String symbol) => _prices.changePercent(symbol);
   List<double> historyOf(String symbol) => _prices.history(symbol);
+  Future<List<ChartPoint>> chartOf(String symbol, ChartRange range) =>
+      _prices.chart(symbol, range);
+
+  /// Bu varlık için gerçek piyasa verisi alınabildi mi?
+  bool hasLiveData(String symbol) =>
+      _prices.quoteTime(symbol).toUtc().year > 2000;
 
   // ---- Hesap özeti ----
   /// Dolar/TL kuru (dolarlı varlıkları TL'ye çevirmek için).

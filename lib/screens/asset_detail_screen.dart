@@ -1,5 +1,6 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../core/category_style.dart';
@@ -7,6 +8,7 @@ import '../core/constants.dart';
 import '../core/format.dart';
 import '../models/asset.dart';
 import '../models/position.dart';
+import '../services/price_service.dart';
 import '../state/game_controller.dart';
 import '../widgets/common.dart';
 import 'alert_sheet.dart';
@@ -25,16 +27,12 @@ class AssetDetailScreen extends StatelessWidget {
     final game = context.watch<GameController>();
     final price = game.priceOf(asset.symbol);
     final change = game.changePercent(asset.symbol);
-    final hist = game.historyOf(asset.symbol);
     final color = change >= 0 ? kGreen : kRed;
     final open = game.canTrade(asset);
     final myPositions =
         game.positions.where((p) => p.symbol == asset.symbol).toList();
     final alertCount = game.activeAlertCountFor(asset.symbol);
 
-    final low = hist.isEmpty ? price : hist.reduce((a, b) => a < b ? a : b);
-    final high = hist.isEmpty ? price : hist.reduce((a, b) => a > b ? a : b);
-    final first = hist.isEmpty ? price : hist.first;
 
     return Scaffold(
       appBar: AppBar(
@@ -115,24 +113,16 @@ class AssetDetailScreen extends StatelessWidget {
               PnlPill(value: change, text: fmtPct(change)),
             ],
           ),
-          const SizedBox(height: 16),
-          AppCard(
-            padding: const EdgeInsets.fromLTRB(8, 16, 12, 8),
-            child: SizedBox(
-              height: 220,
-              child: _PriceChart(values: hist, color: color),
+          if (!game.hasLiveData(asset.symbol))
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text(
+                'Canlı veri alınamadı • örnek fiyat gösteriliyor (internet bağlantısını kontrol et).',
+                style: TextStyle(color: Colors.orangeAccent, fontSize: 12),
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(child: _MiniStat('Düşük', fmtPriceIn(low, asset.currency))),
-              const SizedBox(width: 10),
-              Expanded(child: _MiniStat('Yüksek', fmtPriceIn(high, asset.currency))),
-              const SizedBox(width: 10),
-              Expanded(child: _MiniStat('Başlangıç', fmtPriceIn(first, asset.currency))),
-            ],
-          ),
+          const SizedBox(height: 16),
+          _ChartSection(asset: asset, color: color),
           const SizedBox(height: 12),
           AppCard(
             child: Column(
@@ -219,11 +209,149 @@ class AssetDetailScreen extends StatelessWidget {
   }
 }
 
+class _ChartSection extends StatefulWidget {
+  const _ChartSection({required this.asset, required this.color});
+
+  final Asset asset;
+  final Color color;
+
+  @override
+  State<_ChartSection> createState() => _ChartSectionState();
+}
+
+class _ChartSectionState extends State<_ChartSection> {
+  ChartRange _range = ChartRange.day;
+  Future<List<ChartPoint>>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  void _load() {
+    _future = context
+        .read<GameController>()
+        .chartOf(widget.asset.symbol, _range);
+  }
+
+  void _select(ChartRange r) {
+    setState(() {
+      _range = r;
+      _load();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final asset = widget.asset;
+    final cur = asset.currency;
+    final game = context.read<GameController>();
+
+    return FutureBuilder<List<ChartPoint>>(
+      future: _future,
+      builder: (context, snap) {
+        final loading = snap.connectionState != ConnectionState.done;
+        var points = snap.data ?? const <ChartPoint>[];
+        var fallback = false;
+        if (!loading && points.length < 2) {
+          // Geçmiş veri yoksa (ör. bağlantı yok) canlı oturum verisine dön.
+          final now = DateTime.now();
+          final h = game.historyOf(asset.symbol);
+          points = [
+            for (var i = 0; i < h.length; i++)
+              ChartPoint(now.subtract(Duration(minutes: h.length - 1 - i)), h[i]),
+          ];
+          fallback = true;
+        }
+        final values = points.map((p) => p.price).toList();
+        final low = values.isEmpty ? 0.0 : values.reduce((a, b) => a < b ? a : b);
+        final high = values.isEmpty ? 0.0 : values.reduce((a, b) => a > b ? a : b);
+        final first = values.isEmpty ? 0.0 : values.first;
+        final last = values.isEmpty ? 0.0 : values.last;
+        final periodChange = first == 0 ? 0.0 : (last - first) / first * 100;
+        final lineColor = periodChange >= 0 ? kGreen : kRed;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                for (final r in ChartRange.values)
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ChoiceChip(
+                        label: SizedBox(
+                          width: double.infinity,
+                          child: Text(r.label, textAlign: TextAlign.center),
+                        ),
+                        labelPadding: EdgeInsets.zero,
+                        selected: _range == r,
+                        showCheckmark: false,
+                        visualDensity: VisualDensity.compact,
+                        onSelected: (_) => _select(r),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            AppCard(
+              padding: const EdgeInsets.fromLTRB(8, 16, 12, 8),
+              child: SizedBox(
+                height: 230,
+                child: loading
+                    ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                    : (points.length < 2
+                        ? const Center(
+                            child: Text('Grafik verisi yok',
+                                style: TextStyle(color: kMuted)))
+                        : _PriceChart(
+                            points: points,
+                            color: lineColor,
+                            range: _range,
+                            currency: cur,
+                          )),
+              ),
+            ),
+            if (!loading && fallback)
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text(
+                  'Geçmiş veri alınamadı, oturum verisi gösteriliyor.',
+                  style: TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                ),
+              ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(child: _MiniStat('Düşük', fmtPriceIn(low, cur))),
+                const SizedBox(width: 10),
+                Expanded(child: _MiniStat('Yüksek', fmtPriceIn(high, cur))),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _MiniStat(
+                    '${_range.label} değişim',
+                    fmtPct(periodChange),
+                    color: pnlColor(periodChange),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
 class _MiniStat extends StatelessWidget {
-  const _MiniStat(this.label, this.value);
+  const _MiniStat(this.label, this.value, {this.color});
 
   final String label;
   final String value;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -238,8 +366,8 @@ class _MiniStat extends StatelessWidget {
           FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(value,
-                style: const TextStyle(
-                    fontWeight: FontWeight.w700, fontSize: 13)),
+                style: TextStyle(
+                    fontWeight: FontWeight.w700, fontSize: 13, color: color)),
           ),
         ],
       ),
@@ -248,17 +376,45 @@ class _MiniStat extends StatelessWidget {
 }
 
 class _PriceChart extends StatelessWidget {
-  const _PriceChart({required this.values, required this.color});
+  const _PriceChart({
+    required this.points,
+    required this.color,
+    required this.range,
+    required this.currency,
+  });
 
-  final List<double> values;
+  final List<ChartPoint> points;
   final Color color;
+  final ChartRange range;
+  final Currency currency;
+
+  String _fmtTime(DateTime t, {bool full = false}) {
+    final l = t.toLocal();
+    switch (range) {
+      case ChartRange.day:
+        return DateFormat('HH:mm').format(l);
+      case ChartRange.week:
+      case ChartRange.month:
+        return full
+            ? DateFormat('dd.MM HH:mm').format(l)
+            : DateFormat('dd.MM').format(l);
+      case ChartRange.threeMonths:
+      case ChartRange.year:
+      case ChartRange.fiveYears:
+        return full
+            ? DateFormat('dd.MM.yyyy').format(l)
+            : DateFormat('MM.yy').format(l);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (values.length < 2) return const SizedBox.shrink();
+    final values = points.map((p) => p.price).toList();
     final minV = values.reduce((a, b) => a < b ? a : b);
     final maxV = values.reduce((a, b) => a > b ? a : b);
     final pad = (maxV - minV) * 0.08 + 1e-9;
+    final n = points.length;
+    final step = (n / 4).floorToDouble().clamp(1, double.infinity);
 
     return LineChart(
       LineChartData(
@@ -270,26 +426,62 @@ class _PriceChart extends StatelessWidget {
           getDrawingHorizontalLine: (_) =>
               const FlLine(color: Colors.white10, strokeWidth: 1),
         ),
-        titlesData: const FlTitlesData(show: false),
+        titlesData: FlTitlesData(
+          leftTitles: const AxisTitles(),
+          rightTitles: const AxisTitles(),
+          topTitles: const AxisTitles(),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 22,
+              interval: step.toDouble(),
+              getTitlesWidget: (v, meta) {
+                final i = v.round();
+                if (i < 0 || i >= n || i == n - 1 && n > 4) {
+                  return const SizedBox.shrink();
+                }
+                return Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(_fmtTime(points[i].time),
+                      style: const TextStyle(color: kMuted, fontSize: 10)),
+                );
+              },
+            ),
+          ),
+        ),
         borderData: FlBorderData(show: false),
+        lineTouchData: LineTouchData(
+          touchTooltipData: LineTouchTooltipData(
+            getTooltipColor: (_) => kCard,
+            getTooltipItems: (spots) => [
+              for (final s in spots)
+                LineTooltipItem(
+                  '${fmtPriceIn(s.y, currency)}\n${_fmtTime(points[s.x.toInt().clamp(0, n - 1)].time, full: true)}',
+                  const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12),
+                ),
+            ],
+          ),
+        ),
         lineBarsData: [
           LineChartBarData(
             spots: [
-              for (var i = 0; i < values.length; i++)
-                FlSpot(i.toDouble(), values[i]),
+              for (var i = 0; i < n; i++) FlSpot(i.toDouble(), values[i]),
             ],
-            isCurved: true,
+            isCurved: n < 200,
             curveSmoothness: 0.15,
             preventCurveOverShooting: true,
             color: color,
-            barWidth: 2.5,
+            barWidth: 2.2,
             dotData: const FlDotData(show: false),
             belowBarData: BarAreaData(
               show: true,
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [color.withOpacity(0.35), color.withOpacity(0.0)],
+                colors: [color.withOpacity(0.30), color.withOpacity(0.0)],
               ),
             ),
           ),

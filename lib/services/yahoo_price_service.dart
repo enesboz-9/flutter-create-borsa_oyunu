@@ -215,6 +215,87 @@ class YahooPriceService implements PriceService {
 
   // ---------------------------------------------------------------- arayüz
 
+  // ------------------------------------------------------------ geçmiş grafik
+
+  static const _rangeParams = {
+    ChartRange.day: ('1d', '5m'),
+    ChartRange.week: ('5d', '15m'),
+    ChartRange.month: ('1mo', '60m'),
+    ChartRange.threeMonths: ('3mo', '1d'),
+    ChartRange.year: ('1y', '1d'),
+    ChartRange.fiveYears: ('5y', '1wk'),
+  };
+
+  final Map<String, (DateTime, List<ChartPoint>)> _seriesCache = {};
+
+  Future<List<ChartPoint>> _series(String yahoo, ChartRange r) async {
+    final key = '$yahoo|${r.name}';
+    final cached = _seriesCache[key];
+    final ttl = r == ChartRange.day
+        ? const Duration(minutes: 1)
+        : const Duration(minutes: 30);
+    if (cached != null && DateTime.now().difference(cached.$1) < ttl) {
+      return cached.$2;
+    }
+    try {
+      final p = _rangeParams[r]!;
+      final uri = Uri.parse(
+          'https://query1.finance.yahoo.com/v8/finance/chart/${Uri.encodeComponent(yahoo)}'
+          '?interval=${p.$2}&range=${p.$1}');
+      final res = await _client
+          .get(uri, headers: {'User-Agent': 'Mozilla/5.0'})
+          .timeout(const Duration(seconds: 12));
+      if (res.statusCode != 200) return cached?.$2 ?? const [];
+      final result = (jsonDecode(res.body)['chart']['result'] as List?)?.first;
+      if (result == null) return cached?.$2 ?? const [];
+      final ts = (result['timestamp'] as List?) ?? const [];
+      final q = (result['indicators']?['quote'] as List?)?.first;
+      final closes = (q?['close'] as List?) ?? const [];
+      final out = <ChartPoint>[];
+      for (var i = 0; i < ts.length && i < closes.length; i++) {
+        final c = closes[i];
+        final t = ts[i];
+        if (c is num && t is num) {
+          out.add(ChartPoint(
+              DateTime.fromMillisecondsSinceEpoch(t.toInt() * 1000, isUtc: true)
+                  .toLocal(),
+              c.toDouble()));
+        }
+      }
+      _seriesCache[key] = (DateTime.now(), out);
+      return out;
+    } catch (_) {
+      return cached?.$2 ?? const [];
+    }
+  }
+
+  @override
+  Future<List<ChartPoint>> chart(String symbol, ChartRange range) async {
+    final spec = _specs[symbol];
+    if (spec == null) return const [];
+    final base = await _series(spec.yahoo, range);
+    if (base.isEmpty) return const [];
+    List<ChartPoint> fx = const [];
+    if (spec.fx) {
+      fx = await _series(_fxSymbol, range);
+      if (fx.isEmpty) return const [];
+    }
+    final out = <ChartPoint>[];
+    var j = 0;
+    for (final p in base) {
+      var k = spec.mult;
+      if (spec.fx) {
+        // Her nokta için o ana en yakın (önceki) USD/TL kuru kullanılır.
+        while (j + 1 < fx.length && !fx[j + 1].time.isAfter(p.time)) {
+          j++;
+        }
+        k *= fx[j].price;
+      }
+      out.add(ChartPoint(p.time, p.price * k));
+    }
+    return out;
+  }
+
   @override
   DateTime quoteTime(String symbol) {
     final spec = _specs[symbol];

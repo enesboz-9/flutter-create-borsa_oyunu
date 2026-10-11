@@ -144,7 +144,9 @@ class _PriceTextState extends State<PriceText> {
     final base = widget.style ?? DefaultTextStyle.of(context).style;
     return AnimatedDefaultTextStyle(
       duration: const Duration(milliseconds: 300),
-      style: base.copyWith(color: _flash),
+      style: base.copyWith(
+        color: _flash ?? base.color ?? Theme.of(context).colorScheme.onSurface,
+      ),
       child: Text(widget.text),
     );
   }

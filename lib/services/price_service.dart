@@ -5,6 +5,26 @@ import '../core/constants.dart';
 import '../data/assets_catalog.dart';
 import '../models/asset.dart';
 
+/// Grafik dönemi.
+enum ChartRange { day, week, month, threeMonths, year, fiveYears }
+
+extension ChartRangeX on ChartRange {
+  String get label => switch (this) {
+        ChartRange.day => '1G',
+        ChartRange.week => '1H',
+        ChartRange.month => '1A',
+        ChartRange.threeMonths => '3A',
+        ChartRange.year => '1Y',
+        ChartRange.fiveYears => '5Y',
+      };
+}
+
+class ChartPoint {
+  const ChartPoint(this.time, this.price);
+  final DateTime time;
+  final double price;
+}
+
 /// Fiyat kaynağı arayüzü.
 ///
 /// Gerçek (15 dk gecikmeli) veriye geçerken bu arayüzü uygulayan yeni bir
@@ -16,6 +36,9 @@ abstract class PriceService {
   double changePercent(String symbol);
 
   List<double> history(String symbol);
+
+  /// Seçilen dönem için geçmiş fiyat serisi (boşsa veri alınamadı).
+  Future<List<ChartPoint>> chart(String symbol, ChartRange range);
 
   /// Son fiyatın borsada oluştuğu an (gecikmeli veride gecikmiş zaman).
   /// Hiç veri gelmediyse çok eski bir tarih döner.
@@ -64,6 +87,24 @@ class MockPriceService implements PriceService {
       final h = _history[a.symbol]!..add(p);
       if (h.length > GameConfig.historyLength) h.removeAt(0);
     }
+  }
+
+  @override
+  Future<List<ChartPoint>> chart(String symbol, ChartRange range) async {
+    final h = history(symbol);
+    final step = switch (range) {
+      ChartRange.day => const Duration(minutes: 5),
+      ChartRange.week => const Duration(minutes: 30),
+      ChartRange.month => const Duration(hours: 4),
+      ChartRange.threeMonths => const Duration(days: 1),
+      ChartRange.year => const Duration(days: 3),
+      ChartRange.fiveYears => const Duration(days: 15),
+    };
+    final now = DateTime.now();
+    return [
+      for (var i = 0; i < h.length; i++)
+        ChartPoint(now.subtract(step * (h.length - 1 - i)), h[i]),
+    ];
   }
 
   @override
