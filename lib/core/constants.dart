@@ -7,8 +7,8 @@ class GameConfig {
   /// Bakım teminatı oranı (likidasyon hesabında kullanılır).
   static const double maintenanceMargin = 0.005;
 
-  /// true yapılırsa kapalı piyasalarda işlem engellenir (BIST mesai saatleri vb.).
-  static const bool enforceMarketHours = false;
+  /// Aynı anda bekleyebilecek emir sayısı.
+  static const int maxPendingOrders = 30;
 
   /// Mock fiyat servisinin güncelleme aralığı.
   static const Duration tickInterval = Duration(seconds: 2);

@@ -41,3 +41,20 @@ bool isMarketOpen(Asset asset, {DateTime? now}) {
       }
   }
 }
+
+/// Bugünkü seansın açılış anı (UTC). Yalnızca BIST ve ABD için anlamlıdır.
+DateTime? sessionOpenUtc(Asset asset, {DateTime? now}) {
+  final utc = (now ?? DateTime.now()).toUtc();
+  switch (asset.category) {
+    case AssetCategory.bist:
+      final t = utc.add(const Duration(hours: 3));
+      return DateTime.utc(t.year, t.month, t.day, 10).subtract(const Duration(hours: 3));
+    case AssetCategory.us:
+      final off = _isUsDst(utc) ? -4 : -5;
+      final ny = utc.add(Duration(hours: off));
+      return DateTime.utc(ny.year, ny.month, ny.day, 9, 30)
+          .subtract(Duration(hours: off));
+    default:
+      return null;
+  }
+}

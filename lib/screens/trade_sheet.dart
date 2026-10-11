@@ -5,9 +5,11 @@ import 'package:provider/provider.dart';
 import '../core/constants.dart';
 import '../core/format.dart';
 import '../models/asset.dart';
+import '../models/pending_order.dart';
 import '../models/position.dart';
 import '../state/game_controller.dart';
 import '../widgets/common.dart';
+import '../widgets/order_type_picker.dart';
 import 'exchange_sheet.dart';
 
 /// İşlem (AL/SAT) sayfasını açar. Alarm bildiriminden de kullanılır.
@@ -35,6 +37,8 @@ class TradeSheet extends StatefulWidget {
 
 class _TradeSheetState extends State<TradeSheet> {
   final _marginCtrl = TextEditingController();
+  final _triggerCtrl = TextEditingController();
+  OrderType _type = OrderType.market;
   int _leverage = 1;
   String? _error;
 
@@ -44,8 +48,12 @@ class _TradeSheetState extends State<TradeSheet> {
   double get _margin =>
       double.tryParse(_marginCtrl.text.replaceAll(',', '.')) ?? 0;
 
+  double get _trigger =>
+      double.tryParse(_triggerCtrl.text.replaceAll(',', '.')) ?? 0;
+
   @override
   void dispose() {
+    _triggerCtrl.dispose();
     _marginCtrl.dispose();
     super.dispose();
   }
@@ -66,11 +74,13 @@ class _TradeSheetState extends State<TradeSheet> {
   }
 
   void _submit() {
-    final err = context.read<GameController>().openPosition(
+    final err = context.read<GameController>().submitOpenOrder(
           asset: widget.asset,
           side: widget.side,
           margin: _margin,
           leverage: _leverage,
+          type: _type,
+          triggerPrice: _type == OrderType.market ? null : _trigger,
           atPrice: _shownPrice > 0 ? _shownPrice : null,
         );
     if (err != null) {
@@ -98,8 +108,11 @@ class _TradeSheetState extends State<TradeSheet> {
     _shownPrice = price;
     final notional = _margin * _leverage;
     final commission = g.commissionFor(asset, _margin, _leverage);
+    final open = g.canTrade(asset);
+    // Limit/stop emirde tahminler emir fiyatı üzerinden hesaplanır.
+    final refPrice = (_type != OrderType.market && _trigger > 0) ? _trigger : price;
     final liq = Position.liquidationPriceFor(
-        side: widget.side, entryPrice: price, leverage: _leverage);
+        side: widget.side, entryPrice: refPrice, leverage: _leverage);
     final liqDistance =
         (1 / _leverage - GameConfig.maintenanceMargin) * 100;
     final maxLev = asset.category.maxLeverage;
@@ -150,6 +163,10 @@ class _TradeSheetState extends State<TradeSheet> {
                 ),
               ],
             ),
+            if (!open) ...[
+              const SizedBox(height: 12),
+              MarketClosedBanner(status: g.marketStatus(asset)),
+            ],
             const SizedBox(height: 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -276,6 +293,19 @@ class _TradeSheetState extends State<TradeSheet> {
               ],
             ),
             const SizedBox(height: 16),
+            OrderTypePicker(
+              type: _type,
+              isBuy: isLong,
+              marketOpen: open,
+              currency: cur,
+              priceController: _triggerCtrl,
+              onTypeChanged: (t) => setState(() {
+                _type = t;
+                _error = null;
+              }),
+              onPriceChanged: () => setState(() => _error = null),
+            ),
+            const SizedBox(height: 16),
             AppCard(
               radius: 16,
               padding: const EdgeInsets.all(14),
@@ -321,7 +351,9 @@ class _TradeSheetState extends State<TradeSheet> {
               ),
             const SizedBox(height: 16),
             GradientButton(
-              label: 'Onayla',
+              label: _type == OrderType.market
+                  ? (open ? 'Onayla' : 'Emri kuyruğa al')
+                  : 'Emir ver',
               icon: isLong ? Icons.trending_up : Icons.trending_down,
               gradient: isLong ? kBuyGradient : kSellGradient,
               onPressed: _submit,

@@ -17,6 +17,10 @@ abstract class PriceService {
 
   List<double> history(String symbol);
 
+  /// Son fiyatın borsada oluştuğu an (gecikmeli veride gecikmiş zaman).
+  /// Hiç veri gelmediyse çok eski bir tarih döner.
+  DateTime quoteTime(String symbol);
+
   void start(void Function() onUpdate);
   void stop();
 }
@@ -61,6 +65,9 @@ class MockPriceService implements PriceService {
       if (h.length > GameConfig.historyLength) h.removeAt(0);
     }
   }
+
+  @override
+  DateTime quoteTime(String symbol) => DateTime.now();
 
   @override
   double priceOf(String symbol) => _prices[symbol] ?? 0;

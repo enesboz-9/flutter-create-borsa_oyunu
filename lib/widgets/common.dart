@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../core/category_style.dart';
 import '../core/constants.dart';
 import '../core/format.dart';
+import '../data/logo_index.dart';
 import '../models/asset.dart';
 
 /// Yuvarlak köşeli, hafif çerçeveli kart. İsteğe bağlı gradient ve dokunma.
@@ -156,8 +157,19 @@ class AssetAvatar extends StatelessWidget {
   final Asset asset;
   final double size;
 
-  @override
-  Widget build(BuildContext context) {
+  /// Logo dosyası olan kategoriler (assets/logos/<klasör>/<SEMBOL>.png).
+  String? get _logoPath {
+    final s = asset.symbol;
+    return switch (asset.category) {
+      AssetCategory.bist when kLogosBist.contains(s) => 'assets/logos/bist/$s.png',
+      AssetCategory.us when kLogosUs.contains(s) => 'assets/logos/us/$s.png',
+      AssetCategory.crypto when kLogosCrypto.contains(s) =>
+        'assets/logos/crypto/$s.png',
+      _ => null,
+    };
+  }
+
+  Widget _fallback() {
     final c = asset.category.color;
     final label = asset.symbol.length <= 3
         ? asset.symbol
@@ -182,6 +194,29 @@ class AssetAvatar extends StatelessWidget {
           fontWeight: FontWeight.w800,
           fontSize: size * 0.28,
         ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final path = _logoPath;
+    if (path == null) return _fallback();
+    final radius = size * 0.32;
+    return Container(
+      width: size,
+      height: size,
+      padding: EdgeInsets.all(size * 0.12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Image.asset(
+        path,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (_, __, ___) => _fallback(),
       ),
     );
   }

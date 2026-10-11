@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../core/constants.dart';
 import '../core/format.dart';
 import '../models/asset.dart';
+import '../models/pending_order.dart';
 import '../models/position.dart';
 import '../models/price_alert.dart';
 import '../state/game_controller.dart';
@@ -114,6 +115,18 @@ class PortfolioScreen extends StatelessWidget {
           const SizedBox(height: 16),
           _AllocationCard(game: g, positions: positions),
         ],
+        if (g.orders.isNotEmpty) ...[
+          const SizedBox(height: 20),
+          Text('Bekleyen emirler (${g.orders.length})',
+              style:
+                  const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 10),
+          for (final o in g.orders)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _OrderTile(order: o),
+            ),
+        ],
         const SizedBox(height: 20),
         Text('Açık pozisyonlar (${positions.length})',
             style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
@@ -160,6 +173,58 @@ class PortfolioScreen extends StatelessWidget {
           ],
         ),
       );
+}
+
+class _OrderTile extends StatelessWidget {
+  const _OrderTile({required this.order});
+
+  final PendingOrder order;
+
+  @override
+  Widget build(BuildContext context) {
+    final g = context.watch<GameController>();
+    final asset = g.findAsset(order.symbol);
+    final cur = asset?.currency ?? Currency.tl;
+    return AppCard(
+      radius: 16,
+      padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+      child: Row(
+        children: [
+          if (asset != null) ...[
+            AssetAvatar(asset: asset, size: 36),
+            const SizedBox(width: 12),
+          ],
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(order.symbol,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w800, fontSize: 15)),
+                const SizedBox(height: 2),
+                Text(order.summary(cur),
+                    style: const TextStyle(color: kMuted, fontSize: 12)),
+                if (asset != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      '${g.marketStatus(asset)} • şu an ${fmtPriceIn(g.priceOf(asset.symbol), cur)}',
+                      style: const TextStyle(
+                          color: Colors.orangeAccent, fontSize: 11.5),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Emri iptal et',
+            icon: const Icon(Icons.close, color: kMuted),
+            onPressed: () => g.cancelOrder(order.id),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _AllocationCard extends StatelessWidget {
@@ -298,6 +363,8 @@ class _PositionCard extends StatelessWidget {
                   children: [
                     Row(
                       children: [
+                        AssetAvatar(asset: asset, size: 30),
+                        const SizedBox(width: 10),
                         Text(p.symbol,
                             style: const TextStyle(
                                 fontWeight: FontWeight.w800, fontSize: 17)),

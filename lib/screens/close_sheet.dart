@@ -5,9 +5,11 @@ import 'package:provider/provider.dart';
 import '../core/constants.dart';
 import '../core/format.dart';
 import '../models/asset.dart';
+import '../models/pending_order.dart';
 import '../models/position.dart';
 import '../state/game_controller.dart';
 import '../widgets/common.dart';
+import '../widgets/order_type_picker.dart';
 
 void showCloseSheet(BuildContext context, String positionId) {
   showModalBottomSheet<void>(
@@ -33,6 +35,8 @@ class CloseSheet extends StatefulWidget {
 
 class _CloseSheetState extends State<CloseSheet> {
   final _qtyCtrl = TextEditingController();
+  final _triggerCtrl = TextEditingController();
+  OrderType _type = OrderType.market;
   int? _pct = 100; // Seçili yüzde; elle adet yazılınca null olur.
   bool _initialized = false;
   String? _error;
@@ -40,8 +44,12 @@ class _CloseSheetState extends State<CloseSheet> {
   /// Ekranda en son gösterilen fiyat. Onaya basınca satış bu fiyattan yapılır.
   double _shownPrice = 0;
 
+  double get _trigger =>
+      double.tryParse(_triggerCtrl.text.replaceAll(',', '.')) ?? 0;
+
   @override
   void dispose() {
+    _triggerCtrl.dispose();
     _qtyCtrl.dispose();
     super.dispose();
   }
@@ -61,8 +69,10 @@ class _CloseSheetState extends State<CloseSheet> {
 
   void _submit(Position p) {
     final qty = _qtyFor(p);
-    final err = context.read<GameController>().closePosition(
-          p.id,
+    final err = context.read<GameController>().submitCloseOrder(
+          positionId: p.id,
+          type: _type,
+          triggerPrice: _type == OrderType.market ? null : _trigger,
           atPrice: _shownPrice > 0 ? _shownPrice : null,
           // %100 seçiliyse tamamını kapat (yuvarlama artığı kalmasın).
           quantity: _pct == 100 ? null : qty,
@@ -94,8 +104,12 @@ class _CloseSheetState extends State<CloseSheet> {
 
     final asset = g.assetOf(p.symbol);
     final cur = asset.currency;
-    final price = g.priceOf(p.symbol);
-    _shownPrice = price;
+    final live = g.priceOf(p.symbol);
+    _shownPrice = live;
+    final open = g.canTrade(asset);
+    // Limit/stop emirde tahminler emir fiyatı üzerinden hesaplanır.
+    final price =
+        (_type != OrderType.market && _trigger > 0) ? _trigger : live;
     final isLong = p.side == Side.long;
     final color = isLong ? kGreen : kRed;
 
@@ -135,7 +149,7 @@ class _CloseSheetState extends State<CloseSheet> {
                             fontWeight: FontWeight.w800,
                             color: color),
                       ),
-                      Text('Güncel fiyat: ${fmtPriceIn(price, cur)}',
+                      Text('Güncel fiyat: ${fmtPriceIn(live, cur)}',
                           style:
                               const TextStyle(color: kMuted, fontSize: 12)),
                     ],
@@ -143,6 +157,10 @@ class _CloseSheetState extends State<CloseSheet> {
                 ),
               ],
             ),
+            if (!open) ...[
+              const SizedBox(height: 12),
+              MarketClosedBanner(status: g.marketStatus(asset)),
+            ],
             const SizedBox(height: 14),
             AppCard(
               radius: 16,
@@ -202,6 +220,19 @@ class _CloseSheetState extends State<CloseSheet> {
               ],
             ),
             const SizedBox(height: 16),
+            OrderTypePicker(
+              type: _type,
+              isBuy: !isLong,
+              marketOpen: open,
+              currency: cur,
+              priceController: _triggerCtrl,
+              onTypeChanged: (t) => setState(() {
+                _type = t;
+                _error = null;
+              }),
+              onPriceChanged: () => setState(() => _error = null),
+            ),
+            const SizedBox(height: 16),
             AppCard(
               radius: 16,
               padding: const EdgeInsets.all(14),
@@ -236,7 +267,11 @@ class _CloseSheetState extends State<CloseSheet> {
               ),
             const SizedBox(height: 16),
             GradientButton(
-              label: full ? 'Tamamını ${isLong ? 'sat' : 'kapat'}' : 'Onayla',
+              label: _type != OrderType.market
+                  ? 'Emir ver'
+                  : (!open
+                      ? 'Emri kuyruğa al'
+                      : (full ? 'Tamamını ${isLong ? 'sat' : 'kapat'}' : 'Onayla')),
               icon: Icons.sell_outlined,
               gradient: kSellGradient,
               onPressed: valid ? () => _submit(p) : () {},

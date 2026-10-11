@@ -4,15 +4,15 @@ import 'package:provider/provider.dart';
 import 'core/constants.dart';
 import 'screens/home_shell.dart';
 import 'services/game_repository.dart';
-import 'services/price_service.dart';
+import 'services/yahoo_price_service.dart';
 import 'state/game_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Gerçek veriye geçerken: MockPriceService -> kendi PriceService'in,
-  // LocalGameRepository -> Supabase repository'n.
-  final controller = GameController(MockPriceService(), LocalGameRepository());
+  // Fiyatlar gerçek piyasadan gelir (BIST ~15 dk gecikmeli).
+  // Geliştirmede sahte veri için: MockPriceService().
+  final controller = GameController(YahooPriceService(), LocalGameRepository());
   await controller.init();
 
   runApp(

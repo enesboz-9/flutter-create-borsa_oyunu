@@ -8,6 +8,7 @@ import '../core/format.dart';
 import '../core/market_hours.dart';
 import '../data/assets_catalog.dart';
 import '../models/asset.dart';
+import '../models/pending_order.dart';
 import '../models/position.dart';
 import '../models/price_alert.dart';
 import '../models/trade_record.dart';
@@ -30,6 +31,7 @@ class GameController extends ChangeNotifier {
   List<Position> _positions = [];
   List<TradeRecord> _history = [];
   List<PriceAlert> _alerts = [];
+  List<PendingOrder> _orders = [];
   bool _ready = false;
 
   final StreamController<String> _events = StreamController<String>.broadcast();
@@ -46,6 +48,9 @@ class GameController extends ChangeNotifier {
   List<Position> get positions => List.unmodifiable(_positions);
   List<TradeRecord> get history => List.unmodifiable(_history);
   List<PriceAlert> get alerts => List.unmodifiable(_alerts);
+  List<PendingOrder> get orders => List.unmodifiable(_orders);
+  List<PendingOrder> ordersFor(String symbol) =>
+      _orders.where((o) => o.symbol == symbol).toList();
   int get activeAlertCount => _alerts.where((a) => a.isActive).length;
 
   Future<void> init() async {
@@ -56,6 +61,7 @@ class GameController extends ChangeNotifier {
       _positions = List.of(s.positions);
       _history = List.of(s.history);
       _alerts = List.of(s.alerts);
+      _orders = List.of(s.orders);
     }
     _prices.start(_onTick);
     _ready = true;
@@ -100,6 +106,15 @@ class GameController extends ChangeNotifier {
       .where((p) => currencyOf(p.symbol) == c)
       .fold(0.0, (s, p) => s + p.pnlAt(priceOf(p.symbol)));
 
+  /// Bekleyen açılış emirleri için nakitten ayrılan tutar (para birimi bazında).
+  double _reservedIn(Currency c) => _orders
+      .where((o) => o.action == OrderAction.open && currencyOf(o.symbol) == c)
+      .fold(0.0, (s, o) => s + o.reserved);
+
+  /// Bekleyen emirlerde bloke edilen tutar (TL karşılığı).
+  double get reservedCash =>
+      _reservedIn(Currency.tl) + toTl(Currency.usd, _reservedIn(Currency.usd));
+
   /// Açık pozisyonlardaki teminat (TL karşılığı).
   double get usedMargin =>
       _marginIn(Currency.tl) + toTl(Currency.usd, _marginIn(Currency.usd));
@@ -112,17 +127,23 @@ class GameController extends ChangeNotifier {
   double get unrealizedPnlUsd => _pnlIn(Currency.usd);
 
   /// Dolar cinsinden toplam varlık: dolar nakit + ABD pozisyonları (teminat + K/Z).
-  double get usdHoldings => _usdCash + usedMarginUsd + unrealizedPnlUsd;
+  double get usdHoldings =>
+      _usdCash + usedMarginUsd + unrealizedPnlUsd + _reservedIn(Currency.usd);
 
   /// Dolar nakdi ya da ABD pozisyonu var mı? (Toplam varlıkta $ gösterilir.)
   bool get hasUsd =>
       _usdCash > 1e-9 ||
+      _reservedIn(Currency.usd) > 1e-9 ||
       _positions.any((p) => currencyOf(p.symbol) == Currency.usd);
 
   /// Toplam varlık (TL). Dolar bakiyesi ve ABD pozisyonları güncel kurdan
   /// TL'ye çevrilerek dahil edilir.
   double get equity =>
-      _cash + toTl(Currency.usd, _usdCash) + usedMargin + unrealizedPnl;
+      _cash +
+      toTl(Currency.usd, _usdCash) +
+      usedMargin +
+      unrealizedPnl +
+      reservedCash;
 
   double get totalReturnPercent =>
       (equity - GameConfig.startingBalance) / GameConfig.startingBalance * 100;
@@ -175,36 +196,56 @@ class GameController extends ChangeNotifier {
   double commissionFor(Asset asset, double margin, int leverage) =>
       margin * leverage * asset.category.commissionRate;
 
-  /// Başarılıysa null, değilse hata mesajı döner.
-  String? openPosition({
-    required Asset asset,
-    required Side side,
-    required double margin,
-    required int leverage,
-    double? atPrice,
-  }) {
+  // ---- Piyasa durumu ----
+  /// Bu varlıkta şu an alım-satım yapılabilir mi?
+  ///
+  /// Seans saatleri içinde olmak yetmez: fiyat verisi de o seansa ait olmalı.
+  /// Böylece tatil günlerinde ya da açılışta henüz ilk fiyat gelmemişken
+  /// eski kapanış fiyatından işlem yapılamaz.
+  bool canTrade(Asset asset) {
+    if (!isMarketOpen(asset)) return false;
+    final qt = _prices.quoteTime(asset.symbol);
+    switch (asset.category) {
+      case AssetCategory.bist:
+      case AssetCategory.us:
+        final open = sessionOpenUtc(asset);
+        return open != null && !qt.toUtc().isBefore(open);
+      case AssetCategory.forex:
+      case AssetCategory.metal:
+        return DateTime.now().toUtc().difference(qt.toUtc()) <
+            const Duration(hours: 3);
+      case AssetCategory.crypto:
+        return true;
+    }
+  }
+
+  /// Arayüzde gösterilecek kısa piyasa durumu.
+  String marketStatus(Asset asset) {
+    if (canTrade(asset)) return 'Piyasa açık';
+    if (isMarketOpen(asset)) return 'Açılış bekleniyor';
+    return 'Piyasa kapalı';
+  }
+
+  String _closedMessage(Asset asset) =>
+      '${asset.name} piyasası şu an kapalı. Piyasa kapalıyken alım-satım yapılamaz, emir verebilirsin; açılışta işleme girer.';
+
+  String _insufficient(Currency cur) => cur == Currency.usd
+      ? 'Yetersiz dolar bakiyesi. ABD hisseleri için önce dolar almalısın.'
+      : 'Yetersiz bakiye.';
+
+  String? _validateOpen(Asset asset, double margin, int leverage) {
     if (margin <= 0) return 'Teminat tutarını girin.';
     if (leverage < 1 || leverage > asset.category.maxLeverage) {
       return 'Kaldıraç 1x ile ${asset.category.maxLeverage}x arasında olmalı.';
     }
-    if (GameConfig.enforceMarketHours && !isMarketOpen(asset)) {
-      return '${asset.name} piyasası şu an kapalı.';
-    }
-    // atPrice: kullanıcının ekranda gördüğü fiyat. Verilirse işlem tam bu
-    // fiyattan yapılır; onay anında gelen tik fiyatı etkilemez.
-    final price = (atPrice != null && atPrice > 0)
-        ? atPrice
-        : priceOf(asset.symbol);
-    if (price <= 0) return 'Fiyat alınamadı.';
+    return null;
+  }
 
+  /// Pozisyonu fiilen açar (nakit düşümü çağıran tarafından yapılır).
+  void _fillOpen(Asset asset, Side side, double margin, int leverage,
+      double price, double commission,
+      {bool fromOrder = false}) {
     final cur = asset.currency;
-    final commission = commissionFor(asset, margin, leverage);
-    if (margin + commission > cashOf(cur) + 1e-9) {
-      return cur == Currency.usd
-          ? 'Yetersiz dolar bakiyesi. ABD hisseleri için önce dolar almalısın.'
-          : 'Yetersiz bakiye.';
-    }
-
     final newQty = margin * leverage / price;
     // Aynı varlık + yön + kaldıraç varsa mevcut pozisyona eklenir ve
     // ortalama maliyet güncellenir.
@@ -235,12 +276,202 @@ class GameController extends ChangeNotifier {
       );
       _positions.add(held);
     }
-    _addCash(cur, -(margin + commission));
     _events.add(
-        '${asset.symbol} ${side == Side.long ? 'LONG' : 'SHORT'} ${leverage}x: ${fmtQty(newQty)} adet ${fmtPriceIn(price, cur)} fiyatından alındı. Komisyon: ${fmtMoney(commission, cur)} • Ort. maliyet: ${fmtPriceIn(held.avgCost, cur)}');
+        '${fromOrder ? 'Emir gerçekleşti • ' : ''}${asset.symbol} ${side == Side.long ? 'LONG' : 'SHORT'} ${leverage}x: ${fmtQty(newQty)} adet ${fmtPriceIn(price, cur)} fiyatından alındı. Komisyon: ${fmtMoney(commission, cur)} • Ort. maliyet: ${fmtPriceIn(held.avgCost, cur)}');
+  }
+
+  /// Anında piyasa emri: yalnızca piyasa açıkken çalışır.
+  /// Başarılıysa null, değilse hata mesajı döner.
+  String? openPosition({
+    required Asset asset,
+    required Side side,
+    required double margin,
+    required int leverage,
+    double? atPrice,
+  }) {
+    final invalid = _validateOpen(asset, margin, leverage);
+    if (invalid != null) return invalid;
+    if (!canTrade(asset)) return _closedMessage(asset);
+    // atPrice: kullanıcının ekranda gördüğü fiyat. Verilirse işlem tam bu
+    // fiyattan yapılır; onay anında gelen tik fiyatı etkilemez.
+    final price = (atPrice != null && atPrice > 0)
+        ? atPrice
+        : priceOf(asset.symbol);
+    if (price <= 0) return 'Fiyat alınamadı.';
+
+    final cur = asset.currency;
+    final commission = commissionFor(asset, margin, leverage);
+    if (margin + commission > cashOf(cur) + 1e-9) return _insufficient(cur);
+
+    _fillOpen(asset, side, margin, leverage, price, commission);
+    _addCash(cur, -(margin + commission));
     _persist();
     notifyListeners();
     return null;
+  }
+
+  // ---- Emirler ----
+  /// Alım emri verir.
+  /// - Piyasa emri + piyasa açık: anında işleme girer.
+  /// - Piyasa emri + piyasa kapalı: kuyruğa alınır, açılışta ilk fiyattan işleme girer.
+  /// - Limit / stop: fiyat koşulu oluşunca (ve piyasa açıkken) işleme girer.
+  /// Kuyruğa alınan emirde teminat + komisyon nakitten ayrılır (bloke edilir).
+  String? submitOpenOrder({
+    required Asset asset,
+    required Side side,
+    required double margin,
+    required int leverage,
+    OrderType type = OrderType.market,
+    double? triggerPrice,
+    double? atPrice,
+  }) {
+    if (type == OrderType.market && canTrade(asset)) {
+      return openPosition(
+        asset: asset,
+        side: side,
+        margin: margin,
+        leverage: leverage,
+        atPrice: atPrice,
+      );
+    }
+    final invalid = _validateOpen(asset, margin, leverage);
+    if (invalid != null) return invalid;
+    if (type != OrderType.market && (triggerPrice == null || triggerPrice <= 0)) {
+      return 'Emir fiyatını girin.';
+    }
+    if (_orders.length >= GameConfig.maxPendingOrders) {
+      return 'En fazla ${GameConfig.maxPendingOrders} bekleyen emrin olabilir.';
+    }
+    final cur = asset.currency;
+    final reserve = margin + commissionFor(asset, margin, leverage);
+    if (reserve > cashOf(cur) + 1e-9) return _insufficient(cur);
+
+    _addCash(cur, -reserve);
+    final order = PendingOrder(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      symbol: asset.symbol,
+      action: OrderAction.open,
+      side: side,
+      type: type,
+      createdAt: DateTime.now(),
+      triggerPrice: type == OrderType.market ? null : triggerPrice,
+      margin: margin,
+      leverage: leverage,
+      reserved: reserve,
+    );
+    _orders.insert(0, order);
+    _events.add('Emir kuyruğa alındı • ${asset.symbol} ${order.summary(cur)}');
+    _persist();
+    notifyListeners();
+    // Koşul zaten sağlanıyorsa (ör. fiyatın üstündeki alış limiti) hemen işler.
+    if (type != OrderType.market) _processOrders();
+    return null;
+  }
+
+  /// Satış / pozisyon kapatma emri (kuralları [submitOpenOrder] ile aynıdır).
+  /// [quantity] null ise pozisyonun tamamı.
+  String? submitCloseOrder({
+    required String positionId,
+    double? quantity,
+    OrderType type = OrderType.market,
+    double? triggerPrice,
+    double? atPrice,
+  }) {
+    final p = positionById(positionId);
+    if (p == null) return 'Pozisyon bulunamadı.';
+    final asset = assetOf(p.symbol);
+    if (type == OrderType.market && canTrade(asset)) {
+      return closePosition(positionId, atPrice: atPrice, quantity: quantity);
+    }
+    final qty = quantity ?? p.quantity;
+    if (qty <= 0) return 'Satılacak adedi girin.';
+    if (qty > p.quantity * (1 + 1e-9)) {
+      return 'Elindeki adetten fazlasını satamazsın (${fmtQty(p.quantity)}).';
+    }
+    if (type != OrderType.market && (triggerPrice == null || triggerPrice <= 0)) {
+      return 'Emir fiyatını girin.';
+    }
+    if (_orders.length >= GameConfig.maxPendingOrders) {
+      return 'En fazla ${GameConfig.maxPendingOrders} bekleyen emrin olabilir.';
+    }
+    final full = qty >= p.quantity * (1 - 1e-9);
+    final order = PendingOrder(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      symbol: p.symbol,
+      action: OrderAction.close,
+      side: p.side,
+      type: type,
+      createdAt: DateTime.now(),
+      triggerPrice: type == OrderType.market ? null : triggerPrice,
+      positionId: p.id,
+      quantity: full ? null : qty,
+    );
+    _orders.insert(0, order);
+    _events.add(
+        'Emir kuyruğa alındı • ${asset.symbol} ${order.summary(asset.currency)}');
+    _persist();
+    notifyListeners();
+    if (type != OrderType.market) _processOrders();
+    return null;
+  }
+
+  /// Bekleyen emri iptal eder; ayrılan nakit iade edilir.
+  void cancelOrder(String id) {
+    final i = _orders.indexWhere((o) => o.id == id);
+    if (i < 0) return;
+    final o = _orders.removeAt(i);
+    if (o.action == OrderAction.open) {
+      _addCash(currencyOf(o.symbol), o.reserved);
+    }
+    _events.add('${o.symbol} emri iptal edildi.');
+    _persist();
+    notifyListeners();
+  }
+
+  /// Koşulu oluşan emirleri işler. Yalnızca o varlıkta işlem yapılabiliyorsa
+  /// çalışır; limit/stop emirler güncel (açılış dahil) fiyattan gerçekleşir.
+  void _processOrders() {
+    if (_orders.isEmpty) return;
+    var changed = false;
+    for (final o in List.of(_orders)) {
+      if (!_orders.any((x) => x.id == o.id)) continue;
+      final asset = findAsset(o.symbol);
+      if (asset == null) {
+        _orders.removeWhere((x) => x.id == o.id);
+        if (o.action == OrderAction.open) {
+          _addCash(Currency.tl, o.reserved);
+        }
+        changed = true;
+        continue;
+      }
+      if (!canTrade(asset)) continue;
+      final price = priceOf(o.symbol);
+      if (price <= 0 || !o.isTriggeredBy(price)) continue;
+
+      _orders.removeWhere((x) => x.id == o.id);
+      changed = true;
+      if (o.action == OrderAction.open) {
+        final margin = o.margin ?? 0;
+        _fillOpen(asset, o.side, margin, o.leverage, price,
+            o.reserved - margin,
+            fromOrder: true);
+      } else {
+        final p = o.positionId == null ? null : positionById(o.positionId!);
+        if (p == null) {
+          _events.add('${o.symbol} emri iptal edildi: pozisyon artık açık değil.');
+          continue;
+        }
+        final q = (o.quantity == null || o.quantity! >= p.quantity * (1 - 1e-9))
+            ? null
+            : o.quantity;
+        final err = closePosition(p.id, atPrice: price, quantity: q);
+        if (err != null) _events.add('${o.symbol} emri gerçekleşmedi: $err');
+      }
+    }
+    if (changed) {
+      _persist();
+      notifyListeners();
+    }
   }
 
   Position? positionById(String id) {
@@ -262,9 +493,7 @@ class GameController extends ChangeNotifier {
     if (idx < 0) return 'Pozisyon bulunamadı.';
     final p = _positions[idx];
     final asset = assetOf(p.symbol);
-    if (GameConfig.enforceMarketHours && !isMarketOpen(asset)) {
-      return '${asset.name} piyasası şu an kapalı.';
-    }
+    if (!canTrade(asset)) return _closedMessage(asset);
     final price =
         (atPrice != null && atPrice > 0) ? atPrice : priceOf(p.symbol);
     if (price <= 0) return 'Fiyat alınamadı.';
@@ -288,6 +517,8 @@ class GameController extends ChangeNotifier {
     _addCash(asset.currency, max(0.0, marginPart + gross - closeCommission));
     if (full) {
       _positions.removeAt(idx);
+      _orders.removeWhere(
+          (o) => o.action == OrderAction.close && o.positionId == p.id);
     } else {
       _positions[idx] = p.copyWith(
         margin: p.margin - marginPart,
@@ -324,6 +555,7 @@ class GameController extends ChangeNotifier {
     _positions = [];
     _history = [];
     _alerts = [];
+    _orders = [];
     await _repo.clear();
     notifyListeners();
   }
@@ -426,6 +658,11 @@ class GameController extends ChangeNotifier {
     for (var i = 0; i < _alerts.length; i++) {
       final a = _alerts[i];
       if (!a.isActive) continue;
+      if (a.auto) {
+        // Otomatik emirler de borsa kuralına tabidir: kapalıyken çalışmaz.
+        final asset = findAsset(a.symbol);
+        if (asset == null || !canTrade(asset)) continue;
+      }
       final price = priceOf(a.symbol);
       if (price > 0 && a.isHitBy(price)) {
         final t = a.triggered(price, DateTime.now());
@@ -504,6 +741,7 @@ class GameController extends ChangeNotifier {
     for (final p in liquidated) {
       _liquidate(p);
     }
+    _processOrders();
     final hits = <PriceAlert>[];
     for (final h in _checkAlerts()) {
       if (!h.auto) {
@@ -524,6 +762,8 @@ class GameController extends ChangeNotifier {
 
   void _liquidate(Position p) {
     _positions.removeWhere((x) => x.id == p.id);
+    _orders.removeWhere(
+        (o) => o.action == OrderAction.close && o.positionId == p.id);
     _history.insert(
       0,
       TradeRecord(
@@ -552,6 +792,7 @@ class GameController extends ChangeNotifier {
       positions: _positions,
       history: _history,
       alerts: _alerts,
+      orders: _orders,
     )));
   }
 

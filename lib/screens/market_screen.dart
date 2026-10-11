@@ -305,8 +305,8 @@ class _MoverCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(asset.category.icon, size: 14, color: asset.category.color),
-                const SizedBox(width: 6),
+                AssetAvatar(asset: asset, size: 24),
+                const SizedBox(width: 8),
                 Text(asset.symbol,
                     style: const TextStyle(fontWeight: FontWeight.w800)),
               ],

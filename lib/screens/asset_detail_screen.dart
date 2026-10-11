@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 import '../core/category_style.dart';
 import '../core/constants.dart';
 import '../core/format.dart';
-import '../core/market_hours.dart';
 import '../models/asset.dart';
 import '../models/position.dart';
 import '../state/game_controller.dart';
@@ -28,7 +27,7 @@ class AssetDetailScreen extends StatelessWidget {
     final change = game.changePercent(asset.symbol);
     final hist = game.historyOf(asset.symbol);
     final color = change >= 0 ? kGreen : kRed;
-    final open = isMarketOpen(asset);
+    final open = game.canTrade(asset);
     final myPositions =
         game.positions.where((p) => p.symbol == asset.symbol).toList();
     final alertCount = game.activeAlertCountFor(asset.symbol);
@@ -87,7 +86,7 @@ class AssetDetailScreen extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(width: 4),
-                        Text(open ? 'Piyasa açık' : 'Piyasa kapalı',
+                        Text(game.marketStatus(asset),
                             style:
                                 const TextStyle(color: kMuted, fontSize: 12)),
                       ],
